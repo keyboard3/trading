@@ -1,0 +1,100 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+\
+# 项目指南与约定
+
+本文档概述了量化交易项目的架构、关键文件、配置和约定。
+
+## 1. 项目架构概览
+
+项目结构分为以下几个关键目录：
+
+*   `core_engine/`: 包含数据加载、回测、性能分析和数据获取的核心逻辑。
+    *   `[data_loader.py](mdc:core_engine/data_loader.py)`: 管理从CSV/SQLite加载数据及保存到SQLite。
+    *   `[data_fetcher.py](mdc:core_engine/data_fetcher.py)`: 从yfinance获取市场数据并存储到SQLite。
+    *   `[backtest_engine.py](mdc:core_engine/backtest_engine.py)`: 运行回测模拟。
+    *   `[performance_analyzer.py](mdc:core_engine/performance_analyzer.py)`: 计算性能指标、生成报告和绘图。
+*   `strategies/`: 包含不同的交易策略实现。
+    *   `[simple_ma_strategy.py](mdc:strategies/simple_ma_strategy.py)`: 双移动平均线交叉策略。
+    *   `[rsi_strategy.py](mdc:strategies/rsi_strategy.py)`: 相对强弱指数 (RSI) 策略。
+*   `data/`: 用于存放原始数据文件，如初始CSV。（数据库现为主要数据源）
+*   `results/`: 存储回测输出（报告、图表、CSV摘要）。根据 `CURRENT_RUN_TAG` 进行组织。
+*   `docs/`: 包含策略、概念等的Markdown文档。
+    *   `[rsi_strategy_explained.md](mdc:docs/rsi_strategy_explained.md)`
+    *   `[slippage_explained.md](mdc:docs/slippage_explained.md)`
+    *   `[dual_ma_crossover_strategy.md](mdc:docs/dual_ma_crossover_strategy.md)`
+*   `.cursor/rules/`: 包含类似此文件的规则，以指导AI辅助。
+
+项目的主要入口点是 `[main.py](mdc:main.py)`。
+
+## 2. 核心文件及其作用
+
+*   **`[main.py](mdc:main.py)`**:
+    *   协调整个回测流程。
+    *   处理用户配置（策略选择、参数、股票代码、优化）。
+    *   基于 `CURRENT_RUN_TAG` 管理结果目录结构。
+    *   循环遍历参数组合和股票代码进行回测。
+    *   调用其他模块进行数据加载、信号生成、回测和分析。
+    *   生成摘要报告并调用绘图函数。
+*   **`core_engine/` 模块**:
+    *   `[data_loader.py](mdc:core_engine/data_loader.py)`: 初始化 `[market_data.db](mdc:market_data.db)` (SQLite)，将CSV导入数据库，从数据库加载数据用于回测。
+    *   `[data_fetcher.py](mdc:core_engine/data_fetcher.py)`: 使用 `yfinance` 下载OHLCV数据，并保存/更新到 `[market_data.db](mdc:market_data.db)`。通过先删除后插入的逻辑处理潜在的 `UNIQUE constraint failed` 错误。
+    *   `[backtest_engine.py](mdc:core_engine/backtest_engine.py)`: 输入带信号的价格数据和初始资本，模拟交易，计算投资组合随时间变化的价值，并记录交易。包含手续费计算逻辑。
+    *   `[performance_analyzer.py](mdc:core_engine/performance_analyzer.py)`:
+        *   `calculate_performance_metrics`: 计算关键指标（总回报率、夏普比率、最大回撤等）。**关键：返回一个包含中文键的字典。**
+        *   `generate_performance_report`: 创建基于文本的报告。
+        *   绘图函数 (`plot_portfolio_value`, `plot_strategy_on_price`, `plot_parameter_impact`): 生成并保存各种图表。使用 `_get_metric_safe_name` 处理图表元素中的中文指标名称。
+*   **`strategies/` 模块**:
+    *   每个策略文件（例如 `[rsi_strategy.py](mdc:strategies/rsi_strategy.py)`）实现一个函数，该函数接受市场数据和策略特定参数，返回带信号（买入/卖出/持有）的数据。
+
+## 3. 关键配置参数 (主要在 `[main.py](mdc:main.py)` 中)
+
+*   `DB_FILE`: (在 `[data_loader.py](mdc:core_engine/data_loader.py)` 中) SQLite数据库的路径，例如 `"market_data.db"`。
+*   `RESULTS_DIR`: 所有输出的顶级目录，例如 `"results"`。
+*   `CURRENT_RUN_TAG`: 当前运行的字符串标识符，用于在 `RESULTS_DIR` 下创建子目录以存放特定输出，例如 `"RSI_MSFT_ParamOpt_SmallSet"`。**用户应为不同的实验更改此标签。**
+*   `SELECTED_STRATEGY`: 字符串，例如 `'RSI'` 或 `'MA'`，用于选择活动策略。
+*   `PERFORM_OPTIMIZATION`:布尔值，如果为 `True`，`main.py` 会为 `param_grid` 中定义的多个参数组合运行回测。
+*   `STRATEGY_CONFIG`: 字典，存储每个策略的参数，包括用于优化的 `param_grid`。
+*   `SYMBOLS_TO_BACKTEST`: 股票代码列表，例如 `['MSFT', 'AAPL']`。
+*   `INITIAL_CAPITAL`: 浮点数，回测的初始资本。
+*   `COMMISSION_RATE_PCT`: 浮点数，手续费率的百分比 (例如 `0.0005` 代表 0.05%)。
+*   `MIN_COMMISSION_PER_TRADE`: 浮点数，每笔交易的最低手续费。
+
+## 4. 输入/输出约定与数据流
+
+*   **主要数据源**: SQLite 数据库 `[market_data.db](mdc:market_data.db)` 中的 `ohlcv_data` 表。
+*   **结果输出结构**: 给定运行的所有文件（报告、图表、CSV）都保存到 `results/[CURRENT_RUN_TAG]/` 中。`main.py` 中的 `run_specific_results_dir` 变量保存此路径。
+*   **指标名称一致性 (关键)**:
+    *   `[performance_analyzer.py](mdc:core_engine/performance_analyzer.py)` 的 `calculate_performance_metrics` 函数返回带有**中文键**的指标 (例如 `'总收益率 (%)'`, `'夏普比率 (年化)'`)。
+    *   `[main.py](mdc:main.py)` 在以下情况依赖这些精确的中文键：
+        *   为 `summary_df` 填充 `current_run_metrics`。
+        *   对 `summary_df` 进行排序 (例如，按 `'夏普比率'`)。
+    *   `[performance_analyzer.py](mdc:core_engine/performance_analyzer.py)` 中的 `plot_parameter_impact` 函数也期望这些中文指标名称作为 `metric_to_plot` 的输入。
+    *   **对这些指标名称的任何更改都必须在这些文件中同步。**
+
+## 5. 国际化 (i18n) / 本地化 (l10n) 注意事项
+
+*   **控制台输出**: 主要为中文。
+*   **图表元素 (标题、标签、文件名)**:
+    *   目标: 使用英文以避免Matplotlib的字体问题。
+    *   静态元素硬编码为英文。
+    *   动态生成的元素（例如，涉及指标名称的图表标题/标签）使用 `[performance_analyzer.py](mdc:core_engine/performance_analyzer.py)` 中的 `_get_metric_safe_name` 辅助函数将中文指标名称（如 "夏普比率"）转换为英文对应项（如 "SharpeRatio"），用于图表标题、Y轴标签和文件名。
+*   **报告文本**: 生成的报告包含中文指标名称。
+*   **源代码注释/字符串**: 中英文混合。
+
+## 6. 开发约定与注意事项
+
+*   **Matplotlib 图形管理**: `[performance_analyzer.py](mdc:core_engine/performance_analyzer.py)` 中将图形保存到文件的绘图函数（例如 `plot_portfolio_value`, `plot_strategy_on_price`, `plot_parameter_impact`）**必须在保存后显式关闭图形对象**（例如 `plt.close(fig)` 或 `plt.close()`）。这对于在循环中生成许多图表时防止 `RuntimeWarning: More than 20 figures have been opened` 至关重要。
+*   **变更的连锁反应**:
+    *   修改 `calculate_performance_metrics` 中的指标名称需要在 `[main.py](mdc:main.py)` 中更新（用于 `summary_df` 的创建和排序），并可能影响对 `plot_parameter_impact` 的调用。
+    *   更改 `[main.py](mdc:main.py)` 中的 `STRATEGY_CONFIG` 参数名称或 `param_grid` 结构可能会影响策略函数调用和 `plot_parameter_impact` 中的参数解析。
+*   **文档**:
+    *   `[README.md](mdc:README.md)`: 跟踪项目的总体阶段和高级别成就。包括示例输出（控制台片段、CSV结构、报告片段和指向*示例*图表文件的Markdown图片链接）。
+    *   `docs/*.md`: 包含特定概念的详细解释 (例如 `[rsi_strategy_explained.md](mdc:docs/rsi_strategy_explained.md)`）。
+    *   `[docs/rsi_strategy_explained.md](mdc:docs/rsi_strategy_explained.md)` 包含看涨/看跌背离示例的**占位符Markdown图片链接** (例如 `![看涨背离示例图](mdc:images/rsi_bullish_divergence_example.png ...)`）。需要创建实际图片并将其放置在 `docs/images/` 中才能呈现这些图片。
+*   **错误处理**: 数据库操作中的 `UNIQUE constraint failed` 错误通过 `[data_loader.py](mdc:core_engine/data_loader.py)` 和 `[data_fetcher.py](mdc:core_engine/data_fetcher.py)` 中的"先删除后插入"逻辑处理。
+
+此规则应为未来的交互提供良好的概览。

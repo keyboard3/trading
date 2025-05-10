@@ -1,0 +1,37 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# 前端结构 (React + Vite)
+
+前端为量化交易平台提供了一个基于 Web 的用户界面。它使用 React、TypeScript、Vite 和 Tailwind CSS 构建。
+
+**位置:** `[frontend/](mdc:frontend)`
+
+**关键文件和目录:**
+
+*   `[frontend/src/App.tsx](mdc:frontend/src/App.tsx)`: React 应用的主根组件，负责组织不同的 UI 部分。
+*   `[frontend/src/components/](mdc:frontend/src/components)`: 包含可复用的 React 组件，例如：
+    *   `[frontend/src/components/StrategySelector.tsx](mdc:frontend/src/components/StrategySelector.tsx)`: 用于选择交易策略。
+    *   `[frontend/src/components/ParametersForm.tsx](mdc:frontend/src/components/ParametersForm.tsx)`: 用于输入策略参数。
+    *   `[frontend/src/components/StockInput.tsx](mdc:frontend/src/components/StockInput.tsx)`: 用于指定股票代码。
+    *   `[frontend/src/components/DateRangePicker.tsx](mdc:frontend/src/components/DateRangePicker.tsx)`: 用于选择回测周期。
+    *   `[frontend/src/components/RunBacktestButton.tsx](mdc:frontend/src/components/RunBacktestButton.tsx)`: 用于触发回测的按钮。
+    *   `[frontend/src/components/ResultsDisplay.tsx](mdc:frontend/src/components/ResultsDisplay.tsx)`: 用于展示回测结果。
+    *   `[frontend/src/components/Layout.tsx](mdc:frontend/src/components/Layout.tsx)`: 提供整体页面布局结构。
+*   `[frontend/src/main.tsx](mdc:frontend/src/main.tsx)`: React 应用的入口点。
+*   `[frontend/vite.config.ts](mdc:frontend/vite.config.ts)`: Vite 的配置文件，包括用于将 API 请求代理到后端的配置。
+*   `[frontend/tailwind.config.js](mdc:frontend/tailwind.config.js)`: Tailwind CSS 的配置文件 (如果已创建，这是标准位置)。
+*   `[frontend/package.json](mdc:frontend/package.json)`: 列出前端依赖项和脚本 (例如 `dev`, `build`)。
+*   `[frontend/src/index.css](mdc:frontend/src/index.css)`: 主要的 CSS 文件，导入 Tailwind CSS 指令。
+
+**运行前端:**
+请参阅 `[README.md](mdc:README.md)` 获取说明。通常步骤如下：
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Vite 开发服务器通常运行在 `http://localhost:5173`。
+请确保后端 API 服务器已运行，以便前端正常工作。

@@ -1,0 +1,21 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# 核心回测引擎
+
+`[core_engine/](mdc:core_engine)` 目录包含运行回测、处理数据和分析性能的基础逻辑。
+
+**关键模块:**
+
+*   `[core_engine/backtest_engine.py](mdc:core_engine/backtest_engine.py)`: 实现主要的回测循环，根据策略信号模拟交易，管理投资组合状态（现金、持仓），并计算盈亏。它还包含了交易成本的计算逻辑。
+*   `[core_engine/data_loader.py](mdc:core_engine/data_loader.py)`: 负责加载和解析历史市场数据。支持从 CSV 文件加载以及与 SQLite 数据库交互。
+*   `[core_engine/performance_analyzer.py](mdc:core_engine/performance_analyzer.py)`: 计算并输出各种性能指标（例如，总回报率、年化回报率、最大回撤、夏普比率）。它还生成报告和可视化图表（如投资组合净值图）。
+*   `[core_engine/data_fetcher.py](mdc:core_engine/data_fetcher.py)`: (如果存在并使用) 用于从外部数据源（如雅虎财经的 `yfinance`）获取数据的模块。
+
+**交易策略:**
+交易策略定义在 `[strategies/](mdc:strategies)` 目录中 (例如 `[strategies/simple_ma_strategy.py](mdc:strategies/simple_ma_strategy.py)`, `[strategies/rsi_strategy.py](mdc:strategies/rsi_strategy.py)`)。核心引擎使用这些策略来生成交易信号。
+
+**集成:**
+`[core_engine/](mdc:core_engine)` 中的功能被命令行界面 `[main.py](mdc:main.py)` 和 FastAPI 后端 `[backend/main_api.py](mdc:backend/main_api.py)` 两者共同使用。

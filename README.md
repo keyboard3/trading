@@ -2,6 +2,12 @@
 
 ## 项目设置与运行 (Setup and Run)
 
++### 0. 先决条件 (Prerequisites)
++在开始之前，请确保您的系统已安装以下软件：
++*   **Python**: 版本 3.9 或更高。
++*   **Node.js**: 版本 18.x 或 LTS 版本。
++*   **npm**: 通常随 Node.js 一同安装。npm 用于管理前端项目的依赖。
++
 为了运行本项目，建议遵循以下步骤设置环境并安装依赖：
 
 ### 1. 克隆仓库 (如果需要)
@@ -34,16 +40,16 @@ python3 -m venv venv
 激活后，你的终端提示符前通常会显示 `(venv)`。
 
 ### 3. 安装依赖
-项目所需的第三方库记录在 `requirements.txt` 文件中。在激活虚拟环境后，运行：
-```bash
-pip install -r requirements.txt
-```
-如果你没有使用虚拟环境，并且系统中使用 `pip3`，则运行 `pip3 install -r requirements.txt`。
-
-**(推荐) 使用 Makefile 安装依赖:**
-本项目提供了一个 `Makefile` 来简化常见操作。在激活虚拟环境后，您也可以使用以下命令安装依赖：
+**推荐使用 Makefile 安装后端依赖:**
+本项目提供了一个 `Makefile` 来简化常见操作。在激活虚拟环境后，请使用以下命令安装所有后端 Python 依赖：
 ```bash
 make install-deps
+```
+
+**或者，手动安装后端依赖 (Alternative, manual installation):**
+如果希望手动安装，项目所需的后端 Python 库记录在 `requirements.txt` 文件中。在激活虚拟环境后，运行：
+```bash
+pip install -r requirements.txt
 ```
 
 ### 4. 运行程序与服务
@@ -63,6 +69,17 @@ make install-deps
     make run-api
     ```
     服务通常会运行在 `http://0.0.0.0:8000`。您可以通过浏览器访问 `http://localhost:8000/docs` 来查看和交互API文档。
+*   **启动前端开发服务器:**
+    前端 React 应用位于 `frontend/` 目录。
+    ```bash
+    # 确保您在项目根目录
+    cd frontend
+    npm install  # 首次运行或依赖更新后执行
+    npm run dev
+    cd .. # 返回项目根目录 (可选，根据您的操作习惯)
+    ```
+    Vite 开发服务器通常会运行在 `http://localhost:5173` (或自动选择的下一个可用端口) 并可能自动在浏览器中打开页面。
+    **重要提示:** 请确保在启动前端服务前，后端API服务 (例如通过 `make run-api`) 已经成功运行，否则前端将无法获取数据或执行回测。
 *   **运行 `main.py` (批处理回测/参数优化):**
     ```bash
     make run-backtest-main
@@ -272,7 +289,7 @@ deactivate
 ### 阶段三：Web UI 展示与交互
 
 *   **目标**: 构建一个简单的 Web 界面，用于展示回测结果，并允许用户通过界面选择策略、设置参数、启动回测。
-*   **总体状态**: `[进行中 - 后端API基础已搭建，前端待开发]`
+*   **总体状态**: `[✅ 大部分完成 - 前后端均已实现核心回测交互功能]`
 *   **主要模块与任务**:
     *   `✅` **后端 API 服务 (FastAPI)**:
         *   `✅` **应用基础**: 搭建 FastAPI 应用，处理请求和响应。
@@ -284,14 +301,12 @@ deactivate
             *   `✅` **动态结果目录**: 为每次API调用，在服务器端的 `results/api_runs/` 目录下创建一个基于策略、首个股票代码、时间戳和UUID的唯一子目录，用于存放该次运行生成的报告和图表文件。
             *   `✅` **JSON响应**: 返回包含详细回测结果的JSON响应。对每个成功回测的股票，包含性能指标字典 (`metrics`)、以及指向生成的文本报告和图表的Web可访问URL路径 (例如 `/api_runs/<run_id>/report_RSI_MSFT_....txt`)。
         *   `✅` **静态文件服务**: 配置FastAPI以提供对 `results/api_runs/` 目录下结果文件的静态访问，使得API返回的URL可以直接在浏览器中打开。
-    *   `✅` **Makefile 集成**:
-        *   `✅` 创建 `Makefile`，包含常用命令如 `make run-api`, `make run-backtest-main`, `make install-deps`, `make fetch-data` 等。
         *   `✅` `Makefile` 中的命令配置为直接使用 `venv` 虚拟环境中的Python解释器和相关可执行文件，提高了便捷性和环境一致性。
-    *   `⏳` **前端 Web UI (React + Tailwind CSS)**:
-        *   **构思与设计**: 初步构思UI布局（导航、回测设置区、结果展示区）。
-        *   **(待办)** 组件开发：开发用于策略选择、参数输入、日期选择、股票代码输入的前端组件。
-        *   **(待办)** API交互：实现前端与后端API的通信，发送回测请求，接收并展示结果。
-        *   **(待办)** 结果可视化：在前端展示性能指标、渲染图表（可能直接使用图片URL，或考虑图表库）。
+    *   `✅` **前端 Web UI (React + Tailwind CSS)**:
+        *   `✅` **构思与设计**: 初步构思UI布局（导航、回测设置区、结果展示区）。
+        *   `✅` **组件开发**: 开发用于策略选择、参数输入、日期选择、股票代码输入、运行按钮、布局及结果展示的前端组件 (如 `StrategySelector`, `ParametersForm`, `StockInput`, `DateRangePicker`, `RunBacktestButton`, `ResultsDisplay`, `Layout` 等)。
+        *   `✅` **API交互**: 实现前端与后端API的通信，发送回测请求，接收并展示结果。
+        *   `✅` **结果可视化**: 在前端通过 `ResultsDisplay` 组件友好地展示性能指标、并提供报告和图表的链接。
 *   **学习重点**: Web后端开发 (FastAPI), API设计与实现, 异步编程, Pydantic数据校验, 前端框架基础 (React), CSS框架 (Tailwind CSS), 前后端数据交互。
 
 ### 阶段四：高级功能与优化 (可选)

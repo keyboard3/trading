@@ -1,0 +1,33 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# 项目总览：量化交易平台
+
+本项目是一个为回测交易策略而设计的量化交易平台。它采用 Python 和 FastAPI 构建后端，并使用 React 构建前端用户界面。
+
+**核心目录结构:**
+
+*   `[backend/](mdc:backend)`: 包含 FastAPI 后端服务器代码、API 端点以及与核心交易引擎的集成。
+*   `[frontend/](mdc:frontend)`: 包含 React 前端应用程序，使用 Vite、TypeScript 和 Tailwind CSS 构建。此部分提供用户界面，用于配置和运行回测。
+*   `[core_engine/](mdc:core_engine)`: 包含核心回测逻辑，包括回测引擎、数据加载和性能分析模块。
+*   `[strategies/](mdc:strategies)`: 存储各种交易策略的实现代码。
+*   `[data/](mdc:data)`: 用于存储市场数据（例如 CSV 文件、SQLite 数据库）。
+*   `[results/](mdc:results)`: 默认用于存储回测结果、报告和图表的目录。
+
+**主要入口点与配置:**
+
+*   后端 API: `[backend/main_api.py](mdc:backend/main_api.py)`
+*   前端应用: `[frontend/src/App.tsx](mdc:frontend/src/App.tsx)`
+*   命令行操作: `[main.py](mdc:main.py)` (用于批量回测/参数优化)
+*   项目文档与设置: `[README.md](mdc:README.md)`
+*   任务运行器: `[Makefile](mdc:Makefile)` (提供便捷的命令来构建、运行和管理项目)
+
+**核心功能:**
+
+1.  **回测引擎**: 根据历史市场数据模拟交易策略。
+2.  **策略实现**: 支持多种可插拔的交易策略。
+3.  **数据管理**: 处理市场数据的加载和处理。
+4.  **性能分析**: 计算并展示关键性能指标 (KPIs)。
+5.  **Web 界面**: 允许用户通过 Web 浏览器配置回测、运行并查看结果。

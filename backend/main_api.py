@@ -1,5 +1,7 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 from typing import List, Dict, Any
 import os
@@ -71,7 +73,7 @@ async def startup_event():
 
 class BacktestRequest(BaseModel):
     strategy_id: str
-    symbols: List[str]
+    tickers: List[str]
     start_date: str  # Expected format: "YYYY-MM-DD"
     end_date: str    # Expected format: "YYYY-MM-DD"
     initial_capital: float = DEFAULT_INITIAL_CAPITAL # Use default from main
@@ -99,7 +101,7 @@ async def run_backtest_api(request: BacktestRequest):
     """
     接收回测请求，为每个股票代码触发核心回测引擎，并返回结果链接。
     """
-    print(f"接收到API回测请求 for strategy {request.strategy_id} on symbols: {request.symbols}")
+    print(f"接收到API回测请求 for strategy {request.strategy_id} on symbols: {request.tickers}")
 
     if request.strategy_id not in MAIN_STRATEGY_CONFIG:
         raise HTTPException(status_code=404, detail=f"Strategy '{request.strategy_id}' not found.")
@@ -111,7 +113,7 @@ async def run_backtest_api(request: BacktestRequest):
     unique_id = uuid.uuid4().hex[:8]
     # Sanitize strategy_id and first symbol for a more readable directory name
     safe_strategy_id = "".join(c if c.isalnum() else "_" for c in request.strategy_id)
-    safe_first_symbol = "".join(c if c.isalnum() else "_" for c in request.symbols[0]) if request.symbols else "multi"
+    safe_first_symbol = "".join(c if c.isalnum() else "_" for c in request.tickers[0]) if request.tickers else "multi"
     
     run_tag = f"{safe_strategy_id}_{safe_first_symbol}_{timestamp}_{unique_id}"
     
@@ -126,7 +128,7 @@ async def run_backtest_api(request: BacktestRequest):
 
     all_symbol_results = []
 
-    for symbol_to_run in request.symbols:
+    for symbol_to_run in request.tickers:
         print(f"  Processing symbol: {symbol_to_run} for strategy: {request.strategy_id}")
         
         # Call the core backtest execution function from main.py
@@ -173,6 +175,16 @@ async def run_backtest_api(request: BacktestRequest):
         "results_base_url": f"{API_RESULTS_MOUNT_PATH}/{run_tag}/", # Base URL for this run's artifacts
         "results_per_symbol": all_symbol_results
     }
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    # 原来的可能只是: return JSONResponse(...)
+    print(f"Request body: {await request.body()}") # 打印原始请求体
+    print(f"Validation errors: {exc.errors()}")   # 打印详细的Pydantic验证错误
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()}, # 也可以考虑将错误详情返回给前端
+    )
 
 if __name__ == "__main__":
     import uvicorn

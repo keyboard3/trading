@@ -3,6 +3,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
+# --- BEGIN 中文字体设置 ---
+# try:
+#     plt.rcParams['font.sans-serif'] = ['PingFang SC']  # 指定默认字体为蘋方-简
+#     plt.rcParams['axes.unicode_minus'] = False  # 解决保存图像是负号'-'显示为方块的问题
+# except Exception as e:
+#     print(f"警告：设置中文字体失败，图表中的中文可能无法正确显示。错误：{e}")
+#     print("请确保您的系统已安装中文字体（如SimHei），或者在代码中指定一个您系统中可用的中文字体。")
+# --- END 中文字体设置 ---
+
 def calculate_performance_metrics(portfolio_history: pd.DataFrame, trades: pd.DataFrame, initial_capital: float):
     """
     计算回测的各项绩效指标。
@@ -19,14 +28,14 @@ def calculate_performance_metrics(portfolio_history: pd.DataFrame, trades: pd.Da
     """
     if portfolio_history.empty:
         return {
-            "Error": "Portfolio history is empty. Cannot calculate metrics."
+            "错误": "投资组合历史为空，无法计算指标。"
         }
 
     metrics = {}
 
     # 1. 总收益率
     final_value = portfolio_history['total_value'].iloc[-1]
-    metrics['Total Return (%)'] = ((final_value - initial_capital) / initial_capital) * 100
+    metrics['总收益率 (%)'] = ((final_value - initial_capital) / initial_capital) * 100
 
     # 计算回测天数和年数
     if isinstance(portfolio_history.index, pd.DatetimeIndex):
@@ -34,54 +43,47 @@ def calculate_performance_metrics(portfolio_history: pd.DataFrame, trades: pd.Da
         duration_years = duration_days / 365.25 if duration_days > 0 else 0
     else: # 如果索引不是DatetimeIndex，则无法精确计算年化指标
         duration_years = 0
-        metrics['Warning'] = "Portfolio index is not DatetimeIndex, Annualized metrics might be inaccurate or missing."
+        metrics['警告'] = "投资组合索引不是日期时间类型，年化指标可能不准确或缺失。"
 
 
     # 2. 年化收益率
     if duration_years > 0:
-        metrics['Annualized Return (%)'] = (( (1 + metrics['Total Return (%)']/100) ** (1/duration_years) ) - 1) * 100
+        metrics['年化收益率 (%)'] = (( (1 + metrics['总收益率 (%)']/100) ** (1/duration_years) ) - 1) * 100
     else:
-        metrics['Annualized Return (%)'] = "N/A (Duration < 1 year or unknown)"
+        metrics['年化收益率 (%)'] = "N/A (期限小于一年或未知)"
 
     # 3. 最大回撤
     # 计算累积最高点
     cumulative_max = portfolio_history['total_value'].cummax()
     # 计算回撤百分比
     drawdown = (portfolio_history['total_value'] - cumulative_max) / cumulative_max
-    metrics['Max Drawdown (%)'] = drawdown.min() * 100
+    metrics['最大回撤 (%)'] = drawdown.min() * 100
     
     # 4. 夏普比率 (简化版, 无风险利率为0, 使用日收益率)
     daily_returns = portfolio_history['returns'] # 'returns' 已经是日收益率 pct_change()
     if not daily_returns.empty and daily_returns.std() != 0 and duration_years > 0:
         # 年化夏普比率 (假设一年252个交易日)
-        metrics['Sharpe Ratio (Annualized)'] = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
+        metrics['夏普比率 (年化)'] = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
     else:
-        metrics['Sharpe Ratio (Annualized)'] = "N/A"
+        metrics['夏普比率 (年化)'] = "N/A"
 
     # 5. 交易相关统计 (如果trades DataFrame不为空)
     if trades is not None and not trades.empty:
-        winning_trades = trades[trades['cost'] < 0] # 买入成本为正，卖出收益体现为负成本（即正收益）
-        losing_trades = trades[trades['cost'] > 0] # 买入成本为正
-        
-        # 更精确的盈亏判断应基于单次完整交易（买入后卖出）
-        # 这里简化为：卖出操作视为盈利（如果 proceeds > cost_basis），买入操作是成本。
-        # 为了简化，我们只统计基于 'action' 的交易次数，胜率等需要更复杂的配对逻辑，暂时不实现。
-        # 对于这个阶段，我们统计买卖次数
         buy_trades = trades[trades['action'] == 'BUY']
         sell_trades = trades[trades['action'] == 'SELL']
-        metrics['Total Trades'] = len(trades)
-        metrics['Number of Buy Trades'] = len(buy_trades)
-        metrics['Number of Sell Trades'] = len(sell_trades)
+        metrics['总交易次数'] = len(trades)
+        metrics['买入次数'] = len(buy_trades)
+        metrics['卖出次数'] = len(sell_trades)
 
-        # 实际的胜率等需要跟踪每笔完整交易的盈亏，这需要将买入和卖出配对。
-        # 简化：这里我们无法直接计算胜率，因为trades_log记录的是单边操作。
-        # 我们可以在portfolio_history计算已实现盈亏，但那会更复杂。
-        metrics['Win Rate (%)'] = "N/A (Requires trade pairing)"
-        metrics['Average Win ($)'] = "N/A"
-        metrics['Average Loss ($)'] = "N/A"
+        metrics['胜率 (%)'] = "N/A (需交易配对)"
+        metrics['平均盈利 ($)'] = "N/A (需交易配对)"
+        metrics['平均亏损 ($)'] = "N/A (需交易配对)"
     else:
-        metrics['Total Trades'] = 0
-        metrics['Win Rate (%)'] = "N/A"
+        metrics['总交易次数'] = 0
+        metrics['胜率 (%)'] = "N/A"
+        metrics['平均盈利 ($)'] = "N/A"
+        metrics['平均亏损 ($)'] = "N/A"
+
 
     return metrics
 
@@ -89,7 +91,7 @@ def generate_performance_report(metrics: dict, trades_df: pd.DataFrame = None):
     """
     生成文本格式的回测性能报告。
     """
-    report = "--- Backtest Performance Report ---\n"
+    report = "--- 回测性能报告 ---\n"
     for key, value in metrics.items():
         if isinstance(value, float):
             report += f"{key}: {value:.2f}\n"
@@ -97,10 +99,10 @@ def generate_performance_report(metrics: dict, trades_df: pd.DataFrame = None):
             report += f"{key}: {value}\n"
     
     if trades_df is not None and not trades_df.empty:
-        report += "\n--- Trades Log ---\n"
+        report += "\n--- 交易记录 ---\n"
         report += trades_df.to_string()
     elif trades_df is not None and trades_df.empty:
-        report += "\n--- Trades Log ---\nNo trades executed.\n"
+        report += "\n--- 交易记录 ---\n没有执行任何交易。\n"
         
     return report
 
@@ -137,7 +139,7 @@ def plot_portfolio_value(portfolio_history: pd.DataFrame, title: str = 'Portfoli
             plt.savefig(output_path)
             print(f"投资组合价值图已保存到: {output_path}")
         except Exception as e:
-            print(f"保存图片失败: {e}")
+            print(f"保存投资组合价值图失败：{e}")
     else:
         plt.show() # 如果不保存，则直接显示
 
@@ -195,23 +197,23 @@ def plot_strategy_on_price(
     if not sell_signals.empty:
         ax.scatter(sell_signals.index, sell_signals[close_col], label='Sell Signal', marker='v', color='red', s=150, zorder=5)
 
-    ax.set_title(f'{title} - {symbol_to_plot}')
+    ax.set_title(f'{title}') # title 已经由 main.py 传入了完整且中文化的标题
     ax.set_xlabel('Date')
     ax.set_ylabel('Price')
     ax.legend()
     ax.grid(True)
 
     # 格式化日期显示
-    fig.autofmt_xdate()
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
     ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+    fig.autofmt_xdate()
 
     if output_path:
         try:
             plt.savefig(output_path)
-            print(f"策略示意图已保存到: {output_path}")
+            print(f"策略图已保存到: {output_path}")
         except Exception as e:
-            print(f"保存策略示意图失败: {e}")
+            print(f"保存策略图失败：{e}")
     else:
         plt.show()
 

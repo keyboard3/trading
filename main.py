@@ -89,18 +89,18 @@ def main():
 
         # 6. 绘制并保存投资组合价值图
         print("\n--- 6. 绘制投资组合价值图 ---")
-        plot_title = f"Dual MA ({short_ma_window}-{long_ma_window}) Strategy Portfolio Value on Sample Data"
+        plot_title = f"Dual MA ({short_ma_window}-{long_ma_window}) Strategy Portfolio Value"
         # 确保文件名合法且路径正确
         plot_output_path = os.path.join(results_dir, f"MA_{short_ma_window}_{long_ma_window}_portfolio_value.png")
         plot_portfolio_value(portfolio_history, title=plot_title, output_path=plot_output_path)
 
         # 7. 绘制并保存单个股票的策略示意图 (例如 STOCK_A)
         print("\n--- 7. 绘制策略示意图 (针对特定股票) ---")
-        symbol_for_strategy_plot = 'STOCK_A' 
+        symbol_for_strategy_plot = 'STOCK_A'
         # 检查 data_with_signals 中是否存在该股票，以及是否有足够的行来展示均线
         if symbol_for_strategy_plot in data_with_signals['symbol'].unique() and \
            len(data_with_signals[data_with_signals['symbol'] == symbol_for_strategy_plot]) >= long_ma_window :
-            
+
             strategy_plot_title = f"Dual MA ({short_ma_window}-{long_ma_window}) on {symbol_for_strategy_plot}"
             strategy_plot_output_path = os.path.join(
                 results_dir, 

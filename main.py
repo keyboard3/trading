@@ -85,7 +85,16 @@ def main():
     if not portfolio_history.empty:
         metrics = calculate_performance_metrics(portfolio_history, trades, initial_capital)
         performance_report_text = generate_performance_report(metrics, trades)
-        print(performance_report_text)
+        print(performance_report_text) # 打印到控制台
+
+        # 将性能报告保存到文件
+        report_file_path = os.path.join(results_dir, "phase1_performance_report.txt")
+        try:
+            with open(report_file_path, 'w', encoding='utf-8') as f:
+                f.write(performance_report_text)
+            print(f"\n性能报告已保存到: {report_file_path}")
+        except IOError as e:
+            print(f"\n保存性能报告到文件失败: {e}")
 
         # 6. 绘制并保存投资组合价值图
         print("\n--- 6. 绘制投资组合价值图 ---")

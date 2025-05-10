@@ -90,7 +90,35 @@ deactivate
         *   **目的**: 将上述模块整合起来，形成一个可运行的简单回测流程，并进行初步测试。
         *   **选型/工具**: Python。
         *   **产出**: `main.py` 脚本，可以从数据输入到结果输出完整运行。
-*   **学习重点**: 回测基本流程、策略如何用代码表达、Pandas数据处理、关键绩效指标(KPIs)的含义与计算、Matplotlib基础绘图。
+*   **学习重点**: 回测基本流程、策略如何用代码表达、Pandas数据处理、关键绩效指标(KPIs)的含义与计算（如[最大回撤](docs/max_drawdown_explained.md)、[夏普比率](docs/sharpe_ratio_explained.md)）、Matplotlib基础绘图。
+*   **成果示例**:
+    运行 `python3 main.py` 后，程序将输出回测结果。核心成果包括：
+
+    1.  **性能报告 (摘要)**:
+        程序会生成一份详细的性能报告并打印到控制台，同时保存在 `results/phase1_performance_report.txt`。以下是报告中指标部分的示例内容：
+
+        ```text
+        --- 回测性能报告 ---
+        总收益率 (%): 1.00 
+        年化收益率 (%): N/A (期限小于一年或未知)
+        最大回撤 (%): -0.49
+        夏普比率 (年化): N/A
+        总交易次数: 2
+        买入次数: 1
+        卖出次数: 1
+        胜率 (%): N/A (需交易配对)
+        平均盈利 ($): N/A (需交易配对)
+        平均亏损 ($): N/A (需交易配对)
+        ```
+        *(注：以上数值为基于 `data/sample_stock_data.csv` 和默认参数 (短期MA=2, 长期MA=3) 在特定执行下的一个示例，实际数值会根据数据和参数变化。完整的报告（包含交易日志）请查看 `results/phase1_performance_report.txt` 文件。)*
+
+    2.  **投资组合净值图**:
+        展示了策略执行过程中投资组合总价值的变化情况。
+        ![投资组合净值图](results/MA_2_3_portfolio_value.png "投资组合净值图")
+
+    3.  **策略信号图 (针对 STOCK_A)**:
+        在特定股票的价格图上标出买卖信号点，直观展示策略的决策过程。
+        ![双均线(2-3)策略示意图 - STOCK_A](results/MA_2_3_strategy_on_STOCK_A.png "MA 2-3 Strategy Visualization for STOCK_A")
 
 ### 阶段二：数据管理与策略库增强
 

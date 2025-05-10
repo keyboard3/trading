@@ -122,14 +122,110 @@ deactivate
 
 ### 阶段二：数据管理与策略库增强
 
-*   **目标**: 引入更规范的数据存储方案，丰富策略库，并开始考虑简单的策略参数优化。
-*   **主要模块**:
-    *   数据存储模块 (e.g., SQLite, PostgreSQL)
-    *   数据获取模块 (初步, e.g., 从免费API下载)
-    *   增强的策略库 (支持参数化)
-    *   回测引擎增强 (手续费, 滑点, 参数遍历)
-    *   结果可视化增强
-*   **学习重点**: 数据库操作, 数据获取, 多样化策略, 参数优化概念。
+*   **总目标**: 引入更规范的数据存储方案，丰富策略库，并开始考虑简单的策略参数优化。
+*   **总体状态**: `[✅ 已完成]`
+*   **主要模块与任务**:
+    *   `✅` **1. 数据库集成与数据模型设计**:
+        *   **目的**: 选择并集成一个数据库（如 SQLite）用于存储市场数据。设计初步的数据表结构（例如，用于存储OHLCV数据的表）。
+        *   **选型/工具**: Python, SQLite。
+        *   **产出**:
+            *   项目中集成 SQLite 数据库。
+            *   定义数据表结构的脚本或代码 (例如，在数据加载模块中体现)。
+            *   更新/创建数据加载模块 (`core_engine/data_loader.py`)，使其能够从数据库读取数据，并支持将CSV数据导入数据库的功能（用于初期数据填充和兼容现有数据）。
+    *   `✅` **2. 初步数据获取模块**:
+        *   **目的**: 实现从一个外部数据源（如免费财经API）自动获取历史市场数据并存入我们建立的数据库。
+        *   **选型/工具**: Python, `yfinance` 库 (Yahoo Finance)。
+        *   **产出**:
+            *   一个新的模块/脚本 (例如 `core_engine/data_fetcher.py`)，包含可以下载指定股票代码和时间段的OHLCV数据并存入SQLite数据库的函数。
+            *   基本的用户提示、错误处理和日志记录。
+    *   `✅` **3. 增强的策略库与参数化**:
+        *   **目的**:
+            *   将现有的双均线策略修改为可接受参数的形式（例如，均线窗口期可以作为函数参数传入）。
+            *   至少添加一个新的、可参数化的交易策略，例如 [RSI策略](docs/rsi_strategy_explained.md) (Relative Strength Index)。
+        *   **选型/工具**: Python。
+        *   **产出**:
+            *   修改 `strategies/simple_ma_strategy.py` 使其策略函数接受短期和长期均线窗口作为参数。
+            *   创建新的策略文件 `strategies/rsi_strategy.py` 并实现可参数化的RSI策略逻辑。
+            *   创建策略说明文档 `docs/rsi_strategy_explained.md`。
+    *   `✅` **4. 回测引擎增强**:
+        *   **目的**: 扩展核心回测引擎以支持更真实的模拟和分析：
+            *   `✅` **交易成本**: 实现手续费的计算。当前采用模型：**费率 0.05% (万分之五)，每笔最低收费 5 元**。
+            *   **(可选) [滑点模拟](docs/slippage_explained.md)**: 引入简单的滑点模型（如果时间和复杂度允许）。
+            *   `✅` **参数遍历**: 支持对策略的一组参数进行遍历回测，以比较不同参数下的表现 (通过简单循环遍历预设参数组合)。
+            *   `✅` **结果输出管理**: 每次运行的结果现在保存到 `results/[RUN_TAG]` 子文件夹中，由 `main.py` 中的 `CURRENT_RUN_TAG` 变量控制，便于管理和区分不同批次的实验结果。
+        *   **选型/工具**: Python。
+        *   **产出**:
+            *   更新 `core_engine/backtest_engine.py` 以包含手续费计算逻辑，并在模拟交易时应用。
+            *   (可选) 在 `core_engine/backtest_engine.py` 中加入滑点计算逻辑。
+            *   在 `main.py` 或一个新的高层控制脚本中，实现对策略参数的循环遍历，并对每组参数运行回测。
+            *   更新 `core_engine/performance_analyzer.py` 以在性能报告中体现交易成本，并调整指标计算以适应参数遍历后的批量结果。
+            *   调整 `main.py` 使其将当次运行的报告、图表等输出到 `results` 下的一个特定子目录中，该子目录名由 `CURRENT_RUN_TAG` 变量定义。
+    *   `✅` **5. 结果可视化增强 (初步)**:
+        *   **目的**: 根据参数遍历的结果，提供更丰富的可视化，例如展示不同参数组合下的关键绩效指标对比（如参数影响图）。
+        *   **选型/工具**: Python, Matplotlib/Pandas。
+        *   **产出**:
+            *   `✅` 更新 `core_engine/performance_analyzer.py` 中的绘图函数或添加新函数，以生成参数性能对比图表 (例如 `plot_parameter_impact`)。
+            *   `✅` 修复了在参数优化绘图过程中可能出现的 'RuntimeWarning: More than 20 figures have been opened' 警告，增强了绘图稳定性。
+            *   在 `main.py` (或控制脚本) 中调用新的可视化功能，将对比图表保存到 `results/[RUN_TAG]/` 目录。
+*   **学习重点**: SQLite数据库操作 (创建表, 插入数据, 查询数据), 使用 `yfinance` 获取数据, 实现和参数化RSI等新策略, 理解交易成本和[滑点](docs/slippage_explained.md)对回测的影响, 参数优化（遍历）的基本概念及实现, Pandas和Matplotlib进阶用于结果汇总和对比展示。
+
+*   **成果示例**:
+    当配置 `main.py` 执行参数优化后 (例如 `PERFORM_OPTIMIZATION = True`)，程序运行后会在 `results/` 目录下创建一个由 `CURRENT_RUN_TAG` 指定的子文件夹 (例如 `results/RSI_MSFT_ParamOpt_SmallSet/`)，其中包含该次优化运行的所有产出。主要成果包括：
+
+    1.  **参数优化概要 (控制台输出)**:
+        程序会在控制台打印出基于主要评价指标（如夏普比率）排序的最佳参数组合：
+        ```text
+        ====== Top Performing Parameter Sets (by Sharpe Ratio) ======
+        Top 2 results: (假设仅显示Top 2)
+          股票代码   策略                                               参数  总回报率(%) 年化回报率(%)  夏普比率  最大回撤(%)  买入次数  卖出次数
+        0   MSFT  RSI  {'period': 20, 'oversold_threshold': 30, 'o...       25.87       15.61  0.787808   -12.893035         7         7
+        1   MSFT  RSI  {'period': 14, 'oversold_threshold': 25, 'o...       18.33       10.77  0.585137   -10.228701        10        10
+        ```
+        *(注：以上数值及参数为示例，实际结果会随数据和参数配置而变化。)*
+
+    2.  **参数优化详细汇总 (CSV文件)**:
+        所有参数组合的回测性能指标会保存在一个CSV文件中，路径类似于 `results/RSI_MSFT_ParamOpt_SmallSet/all_backtests_summary_RSI_OPTIMIZED.csv`。其内容结构大致如下：
+        ```csv
+        股票代码,策略,参数,总回报率(%),年化回报率(%),夏普比率,最大回撤(%),买入次数,卖出次数
+        MSFT,RSI,"{'period': 20, 'oversold_threshold': 30, 'overbought_threshold': 75}",25.87,15.61,0.787808,-12.893035,7,7
+        MSFT,RSI,"{'period': 14, 'oversold_threshold': 25, 'overbought_threshold': 70}",18.33,10.77,0.585137,-10.228701,10,10
+        MSFT,RSI,"{'period': 14, 'oversold_threshold': 30, 'overbought_threshold': 75}",-5.20,-3.15,-0.174022,-15.730011,8,8
+        ...
+        ```
+
+    3.  **单次回测报告 (含交易成本)**:
+        对于参数优化过程中的每一次独立回测，都会生成详细的文本报告，例如 `results/RSI_MSFT_ParamOpt_SmallSet/report_RSI_MSFT_period20_oversold_threshold30_overbought_threshold75.txt`。报告中包含了手续费信息和带手续费的交易记录：
+        ```text
+        --- RSI 策略在 MSFT上的回测报告
+        参数: {'period': 20, 'oversold_threshold': 30, 'overbought_threshold': 75}
+        初始资金: 100000.0 ---
+        手续费设置: 费率=0.0500%, 最低收费=5.00元/笔
+        ---
+        总收益率 (%): 25.87
+        年化收益率 (%): 15.61
+        最大回撤 (%): -12.89
+        夏普比率 (年化): 0.79
+        总交易次数: 14
+        买入次数: 7
+        卖出次数: 7
+        ...
+
+        --- 交易记录 ---
+           symbol action  quantity   price      cost  commission  holding_quantity cash_after_trade  position_value  total_value
+        timestamp
+        2023-02-15   MSFT    BUY       200  260.11  52022.00        26.01               200         47951.99        52022.00    100000.00
+        2023-03-10   MSFT   SELL       200  270.50 -54100.00        27.05                 0        102024.94            0.00    102024.94
+        ...
+        ```
+
+    4.  **参数影响可视化**: 
+        程序会为每个优化的参数生成其对关键指标影响的图表，例如 `results/RSI_MSFT_ParamOpt_SmallSet/param_impact_SharpeRatio_vs_period_for_MSFT_all_others_averaged.png`。
+        ![RSI Period vs Sharpe Ratio (MSFT)](results/RSI_MSFT_ParamOpt_SmallSet/param_impact_SharpeRatio_vs_period_for_MSFT_all_others_averaged.png "RSI Period vs Sharpe Ratio for MSFT")
+        *(此图展示了当RSI策略的`period`参数变化时，在MSFT股票上，平均夏普比率如何随之变化，其他参数取平均效果。)*
+
+    5.  **投资组合价值图 (示例)**:
+        每次独立回测也会生成投资组合价值图，例如 `results/RSI_MSFT_ParamOpt_SmallSet/portfolio_RSI_MSFT_period20_oversold_threshold30_overbought_threshold75.png`。
+        ![Portfolio Value RSI on MSFT (Example)](results/RSI_MSFT_ParamOpt_SmallSet/portfolio_RSI_MSFT_period20_oversold_threshold30_overbought_threshold75.png "Portfolio Value for RSI on MSFT with specific parameters")
 
 ### 阶段三：Web UI 展示与交互
 

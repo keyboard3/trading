@@ -2,15 +2,18 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import ast
+import os
 
-# --- BEGIN 中文字体设置 ---
-# try:
-#     plt.rcParams['font.sans-serif'] = ['PingFang SC']  # 指定默认字体为蘋方-简
-#     plt.rcParams['axes.unicode_minus'] = False  # 解决保存图像是负号'-'显示为方块的问题
-# except Exception as e:
-#     print(f"警告：设置中文字体失败，图表中的中文可能无法正确显示。错误：{e}")
-#     print("请确保您的系统已安装中文字体（如SimHei），或者在代码中指定一个您系统中可用的中文字体。")
-# --- END 中文字体设置 ---
+# # --- BEGIN 中文字体尝试设置 --- (移除，因为将使用英文图表)
+# def set_chinese_font():
+#     """尝试设置matplotlib的中文字体，以便图表能正确显示中文。"""
+#     try:
+#         plt.rcParams['font.sans-serif'] = ['PingFang SC', 'Microsoft YaHei', 'SimHei'] 
+#         plt.rcParams['axes.unicode_minus'] = False
+#     except Exception as e:
+#         print(f"警告：自动设置中文字体失败。图表中的中文可能无法正确显示。错误：{e}")
+# # --- END 中文字体尝试设置 ---
 
 def calculate_performance_metrics(portfolio_history: pd.DataFrame, trades: pd.DataFrame, initial_capital: float):
     """
@@ -87,11 +90,25 @@ def calculate_performance_metrics(portfolio_history: pd.DataFrame, trades: pd.Da
 
     return metrics
 
-def generate_performance_report(metrics: dict, trades_df: pd.DataFrame = None):
+def generate_performance_report(metrics: dict, 
+                                trades_df: pd.DataFrame = None, 
+                                title: str = None,
+                                commission_rate_pct: float = None, # 新增手续费率参数
+                                min_commission: float = None):    # 新增最低手续费参数
     """
     生成文本格式的回测性能报告。
+    新增显示手续费设置的功能。
     """
-    report = "--- 回测性能报告 ---\n"
+    if title:
+        report = f"--- {title} ---\n"
+    else:
+        report = "--- 回测性能报告 ---\n"
+    
+    # 在指标前显示手续费信息 (如果提供了)
+    if commission_rate_pct is not None and min_commission is not None:
+        report += f"手续费设置: 费率={commission_rate_pct*100:.4f}%, 最低收费={min_commission:.2f}元/笔\n"
+        report += "---\n" # 分隔线
+        
     for key, value in metrics.items():
         if isinstance(value, float):
             report += f"{key}: {value:.2f}\n"
@@ -109,101 +126,86 @@ def generate_performance_report(metrics: dict, trades_df: pd.DataFrame = None):
 def plot_portfolio_value(portfolio_history: pd.DataFrame, title: str = 'Portfolio Value Over Time', output_path: str = None):
     """
     绘制投资组合总价值随时间变化的曲线图。
-
-    参数:
-    portfolio_history (pd.DataFrame): 每日投资组合价值历史，索引为日期时间。
-                                      必须包含 'total_value' 列。
-    title (str): 图表标题。
-    output_path (str, optional): 图片保存路径。如果提供，则保存图片。
     """
+    # set_chinese_font() # 移除
     if portfolio_history.empty or 'total_value' not in portfolio_history.columns:
-        print("无法绘制投资组合价值图：数据为空或缺少 'total_value' 列。")
+        print("Cannot plot portfolio value: Data is empty or missing 'total_value' column.")
         return
 
-    plt.figure(figsize=(12, 6))
+    fig = plt.figure(figsize=(12, 6)) # Capture the figure object
     plt.plot(portfolio_history.index, portfolio_history['total_value'], label='Portfolio Value')
     
-    plt.title(title)
+    plt.title(title) # Title is passed from main.py, ensure it's English there too
     plt.xlabel('Date')
     plt.ylabel('Portfolio Value')
     plt.legend()
     plt.grid(True)
     
-    # 格式化日期显示
     plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-    plt.gca().xaxis.set_major_locator(mdates.AutoDateLocator()) # 自动选择合适的日期间隔
-    plt.gcf().autofmt_xdate() # 自动旋转日期标签以防重叠
+    plt.gca().xaxis.set_major_locator(mdates.AutoDateLocator())
+    plt.gcf().autofmt_xdate()
 
     if output_path:
         try:
             plt.savefig(output_path)
-            print(f"投资组合价值图已保存到: {output_path}")
+            print(f"Portfolio value chart saved to: {output_path}")
+            plt.close(fig) # Close the figure after saving
         except Exception as e:
-            print(f"保存投资组合价值图失败：{e}")
+            print(f"Failed to save portfolio value chart: {e}")
     else:
-        plt.show() # 如果不保存，则直接显示
+        plt.show()
 
 def plot_strategy_on_price(
     data_with_signals: pd.DataFrame,
     symbol_to_plot: str,
-    title: str = 'Strategy Visualization',
+    indicator_cols: list = None,
+    strategy_name: str = '',
+    title: str = 'Strategy Visualization', # Default title in English
     output_path: str = None,
     close_col: str = 'close',
-    short_ma_col: str = 'short_ma',
-    long_ma_col: str = 'long_ma',
     signal_col: str = 'signal',
     symbol_col: str = 'symbol'
 ):
     """
-    绘制单个股票的价格、均线及买卖信号点。
-
-    参数:
-    data_with_signals (pd.DataFrame): 包含价格、均线和信号的DataFrame。
-    symbol_to_plot (str): 需要绘制的股票代码。
-    title (str): 图表标题。
-    output_path (str, optional): 图片保存路径。
-    close_col (str): 收盘价列名。
-    short_ma_col (str): 短期均线列名。
-    long_ma_col (str): 长期均线列名。
-    signal_col (str): 交易信号列名。
-    symbol_col (str): 股票代码列名。
+    绘制单个股票的价格、指定指标及买卖信号点。
     """
+    # set_chinese_font() # 移除
     if data_with_signals.empty or symbol_col not in data_with_signals.columns:
-        print(f"无法绘制策略图：数据为空或缺少 '{symbol_col}' 列。")
+        print(f"Cannot plot strategy: Data is empty or missing '{symbol_col}' column.")
         return
 
     stock_data = data_with_signals[data_with_signals[symbol_col] == symbol_to_plot]
 
     if stock_data.empty:
-        print(f"无法绘制策略图：未找到股票代码 '{symbol_to_plot}' 的数据。")
+        print(f"Cannot plot strategy: Data for symbol '{symbol_to_plot}' not found.")
         return
 
     fig, ax = plt.subplots(figsize=(14, 7))
 
-    # 绘制价格和均线
-    ax.plot(stock_data.index, stock_data[close_col], label=f'{symbol_to_plot} Close Price', alpha=0.7)
-    if short_ma_col in stock_data.columns:
-        ax.plot(stock_data.index, stock_data[short_ma_col], label=f'Short MA ({short_ma_col})', linestyle='--')
-    if long_ma_col in stock_data.columns:
-        ax.plot(stock_data.index, stock_data[long_ma_col], label=f'Long MA ({long_ma_col})', linestyle='--')
+    ax.plot(stock_data.index, stock_data[close_col], label=f'{symbol_to_plot} {close_col.capitalize()}', alpha=0.9, color='black')
 
-    # 标记买入信号
+    if indicator_cols:
+        for i, indicator_name in enumerate(indicator_cols):
+            if indicator_name in stock_data.columns:
+                ax.plot(stock_data.index, stock_data[indicator_name], 
+                        label=f'{indicator_name.upper()} ({strategy_name})', linestyle='--', alpha=0.7)
+            else:
+                print(f"Warning: Indicator column '{indicator_name}' not found in data, cannot plot.")
+
     buy_signals = stock_data[stock_data[signal_col] == 1]
     if not buy_signals.empty:
         ax.scatter(buy_signals.index, buy_signals[close_col], label='Buy Signal', marker='^', color='green', s=150, zorder=5)
 
-    # 标记卖出信号
     sell_signals = stock_data[stock_data[signal_col] == -1]
     if not sell_signals.empty:
         ax.scatter(sell_signals.index, sell_signals[close_col], label='Sell Signal', marker='v', color='red', s=150, zorder=5)
 
-    ax.set_title(f'{title}') # title 已经由 main.py 传入了完整且中文化的标题
+    ax.set_title(title) # Title is passed from main.py, ensure it's English there
     ax.set_xlabel('Date')
     ax.set_ylabel('Price')
     ax.legend()
     ax.grid(True)
 
-    # 格式化日期显示
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
     ax.xaxis.set_major_locator(mdates.AutoDateLocator())
     fig.autofmt_xdate()
@@ -211,11 +213,140 @@ def plot_strategy_on_price(
     if output_path:
         try:
             plt.savefig(output_path)
-            print(f"策略图已保存到: {output_path}")
+            print(f"Strategy chart saved to: {output_path}")
+            plt.close(fig) # Close the figure after saving
         except Exception as e:
-            print(f"保存策略图失败：{e}")
+            print(f"Failed to save strategy chart: {e}")
     else:
         plt.show()
+
+def plot_parameter_impact(
+    summary_df: pd.DataFrame, 
+    target_symbol: str, 
+    parameter_to_plot: str, 
+    metric_to_plot: str = '夏普比率',
+    output_dir: str = 'results',
+    other_params_to_fix: dict = None # 可选，用于固定其他参数的值进行筛选
+):
+    """
+    绘制单个参数对指定性能指标影响的图表。
+    例如，绘制 'period' 对 '夏普比率' 的影响。
+
+    参数:
+    summary_df (pd.DataFrame): 包含所有回测运行总结的DataFrame。
+                                必须包含 '股票代码', '参数', 和 metric_to_plot 列。
+    target_symbol (str): 要绘制图表的目标股票代码。
+    parameter_to_plot (str): 要作为X轴的参数名称 (例如 'period')。
+    metric_to_plot (str): 要作为Y轴的性能指标名称 (例如 '夏普比率')。
+    output_dir (str): 图表保存目录。
+    other_params_to_fix (dict): 可选字典，用于固定其他参数的值。 
+                                  例如 {'oversold_threshold': 30, 'overbought_threshold': 70}
+                                  如果为None，则对其他参数的所有组合取平均值。
+    """
+    if summary_df.empty:
+        print(f"plot_parameter_impact: summary_df 为空，无法绘图。")
+        return
+
+    if '参数' not in summary_df.columns or '股票代码' not in summary_df.columns or metric_to_plot not in summary_df.columns:
+        print(f"plot_parameter_impact: summary_df 缺少必要的列 ('股票代码', '参数', '{metric_to_plot}')")
+        return
+
+    # 复制DataFrame以避免修改原始数据
+    df_to_plot = summary_df.copy()
+
+    # 1. 解析'参数'列字符串为字典，并提取各参数为新列
+    try:
+        # 先尝试获取所有参数名，假设所有参数字典结构一致
+        sample_params_dict = ast.literal_eval(df_to_plot['参数'].iloc[0])
+        param_keys = list(sample_params_dict.keys())
+        
+        for key in param_keys:
+            df_to_plot[f'param_{key}'] = df_to_plot['参数'].apply(lambda x: ast.literal_eval(x).get(key))
+    except Exception as e:
+        print(f"plot_parameter_impact: 解析'参数'列失败: {e}。请确保参数列是有效的字典字符串。")
+        return
+
+    # 2. 筛选目标股票
+    df_symbol = df_to_plot[df_to_plot['股票代码'] == target_symbol].copy()
+    if df_symbol.empty:
+        print(f"plot_parameter_impact: 未找到股票代码 '{target_symbol}' 的数据。")
+        return
+
+    # 3. 转换指标列为数值型，无效值转为NaN
+    df_symbol[metric_to_plot] = pd.to_numeric(df_symbol[metric_to_plot], errors='coerce')
+    df_symbol.dropna(subset=[metric_to_plot], inplace=True) # 移除无法转换为数值的行
+
+    # 检查 parameter_to_plot 是否存在于解析后的列中
+    col_to_group_by = f'param_{parameter_to_plot}'
+    if col_to_group_by not in df_symbol.columns:
+        print(f"plot_parameter_impact: 参数 '{parameter_to_plot}' (作为 '{col_to_group_by}') 在解析后未找到。")
+        return
+
+    # 4. (可选) 固定其他参数
+    fixed_params_str_part = "all_others_averaged"
+    if other_params_to_fix and isinstance(other_params_to_fix, dict):
+        conditions = []
+        fixed_params_str_parts_list = []
+        for p_name, p_val in other_params_to_fix.items():
+            parsed_col_name = f'param_{p_name}'
+            if parsed_col_name in df_symbol.columns:
+                df_symbol = df_symbol[df_symbol[parsed_col_name] == p_val]
+                fixed_params_str_parts_list.append(f"{p_name}{p_val}")
+            else:
+                print(f"plot_parameter_impact: 尝试固定参数 '{p_name}' 但未在数据中找到解析列 '{parsed_col_name}'")
+        if not df_symbol.empty and fixed_params_str_parts_list:
+            fixed_params_str_part = "fixed_" + "_".join(fixed_params_str_parts_list)
+        elif df_symbol.empty:
+            print(f"plot_parameter_impact: 在固定参数 {other_params_to_fix} 后没有剩余数据。")
+            return
+            
+    # 5. 按目标参数分组并计算指标的平均值
+    # 如果没有固定其他参数 (other_params_to_fix is None)，则这里会对其他参数的不同组合取平均
+    grouped_data = df_symbol.groupby(col_to_group_by)[metric_to_plot].mean().reset_index()
+
+    if grouped_data.empty:
+        print(f"plot_parameter_impact: 分组后数据为空 (股票: {target_symbol}, 参数: {parameter_to_plot})。无法绘图。")
+        return
+
+    # 6. 绘图
+    plt.figure(figsize=(10, 6))
+    plt.plot(grouped_data[col_to_group_by], grouped_data[metric_to_plot], marker='o', linestyle='-')
+    
+    metric_safe_name_for_plot = _get_metric_safe_name(metric_to_plot)
+
+    title_str = f'{metric_safe_name_for_plot} vs. {parameter_to_plot} for {target_symbol}'
+    if other_params_to_fix:
+        title_str += f" (Fixed: {other_params_to_fix})"
+    else:
+        title_str += f" (Averaged over other params)"
+    plt.title(title_str)
+    plt.xlabel(parameter_to_plot)
+    plt.ylabel(f'Average {metric_safe_name_for_plot}')
+    plt.grid(True)
+    plt.tight_layout()
+
+    # 7. 保存图表
+    plot_filename = f"param_impact_{metric_safe_name_for_plot}_vs_{parameter_to_plot}_for_{target_symbol}_{fixed_params_str_part}.png"
+    plot_output_path = os.path.join(output_dir, plot_filename)
+    try:
+        plt.savefig(plot_output_path)
+        print(f"Parameter impact chart saved to: {plot_output_path}")
+    except Exception as e:
+        print(f"Failed to save parameter impact chart: {e}")
+    plt.close() # 关闭图形，避免在循环中打开过多窗口
+
+# Helper function to get English safe names for metrics used in plots
+def _get_metric_safe_name(metric_name_cn: str) -> str:
+    mapping = {
+        "夏普比率": "SharpeRatio",
+        "总回报率(%)": "TotalReturnPct",
+        "最大回撤(%)": "MaxDrawdownPct",
+        "年化回报率(%)": "AnnualizedReturnPct",
+        # 可以根据需要添加更多映射
+    }
+    # 替换掉特殊字符，以防原始metric_name_cn不在mapping中但仍用于文件名
+    safe_fallback_name = metric_name_cn.replace('(%','Pct').replace('(','').replace(')','').replace(' ','_').replace('/','_').replace('%','Pct')
+    return mapping.get(metric_name_cn, safe_fallback_name) # 如果找不到映射，返回处理过的原名（可能仍含中文）
 
 if __name__ == '__main__':
     # 构造与backtest_engine.py中类似的测试数据
@@ -249,7 +380,11 @@ if __name__ == '__main__':
     print(trades_test_df)
 
     metrics_test = calculate_performance_metrics(portfolio_history_test_df, trades_test_df, initial_capital_test)
-    report_test = generate_performance_report(metrics_test, trades_test_df)
+    # 模拟手续费信息传递给报告生成器
+    report_test = generate_performance_report(metrics_test, trades_test_df, 
+                                              title="测试性能报告 (含手续费信息)",
+                                              commission_rate_pct=0.0005, 
+                                              min_commission=5.0)
 
     print("\n--- 性能报告 ---")
     print(report_test)
@@ -271,3 +406,26 @@ if __name__ == '__main__':
                            symbol_to_plot='TEST_STOCK',
                            title='Test Strategy Visualization (Price, MAs, Signals)',
                            output_path='../results/test_strategy_visualization.png') 
+
+    # --- 测试 plot_parameter_impact ---
+    print("\n--- 测试参数影响图绘制 ---")
+    # 构造一个模拟的 summary_df
+    sample_summary_data = {
+        '股票代码': ['MSFT', 'MSFT', 'MSFT', 'MSFT', 'MSFT', 'MSFT', 'AAPL', 'AAPL'],
+        '参数': [
+            str({'period': 10, 'threshold': 20}), str({'period': 10, 'threshold': 30}),
+            str({'period': 14, 'threshold': 20}), str({'period': 14, 'threshold': 30}),
+            str({'period': 20, 'threshold': 20}), str({'period': 20, 'threshold': 30}),
+            str({'period': 10, 'threshold': 25}), str({'period': 14, 'threshold': 25})
+        ],
+        '夏普比率': [-0.5, -0.2, 0.1, 0.3, -0.1, 0.0, -0.4, 0.2],
+        '总回报率(%)': [1.0, 2.0, 3.0, 5.0, 0.5, 1.5, 0.8, 2.5]
+    }
+    test_summary_df = pd.DataFrame(sample_summary_data)
+    os.makedirs("results", exist_ok=True) #确保目录存在
+
+    plot_parameter_impact(test_summary_df, target_symbol='MSFT', parameter_to_plot='period', metric_to_plot='夏普比率', output_dir='results')
+    plot_parameter_impact(test_summary_df, target_symbol='MSFT', parameter_to_plot='threshold', metric_to_plot='夏普比率', output_dir='results')
+    plot_parameter_impact(test_summary_df, target_symbol='AAPL', parameter_to_plot='period', metric_to_plot='总回报率(%)', output_dir='results')
+    # 测试固定其他参数
+    plot_parameter_impact(test_summary_df, target_symbol='MSFT', parameter_to_plot='period', metric_to_plot='夏普比率', output_dir='results', other_params_to_fix={'threshold': 20}) 

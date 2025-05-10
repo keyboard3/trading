@@ -40,12 +40,54 @@ pip install -r requirements.txt
 ```
 如果你没有使用虚拟环境，并且系统中使用 `pip3`，则运行 `pip3 install -r requirements.txt`。
 
-### 4. 运行主程序
-完成上述步骤后，你可以运行项目的主程序：
+**(推荐) 使用 Makefile 安装依赖:**
+本项目提供了一个 `Makefile` 来简化常见操作。在激活虚拟环境后，您也可以使用以下命令安装依赖：
 ```bash
-python3 main.py
+make install-deps
 ```
-程序将使用 `data/sample_stock_data.csv` 文件进行回测，并在 `results/` 目录下生成性能报告和图表。
+
+### 4. 运行程序与服务
+
+本项目包含两种主要的运行模式：通过 `main.py` 直接执行批处理回测/参数优化，以及通过 FastAPI 后端 API 服务进行交互式回测。
+
+**使用 Makefile (推荐):**
+
+`Makefile` 提供了便捷的命令来启动服务和运行脚本。请确保您已按照上述步骤激活了虚拟环境。
+
+*   **查看所有可用命令:**
+    ```bash
+    make help
+    ```
+*   **启动 FastAPI 后端 API 服务:**
+    ```bash
+    make run-api
+    ```
+    服务通常会运行在 `http://0.0.0.0:8000`。您可以通过浏览器访问 `http://localhost:8000/docs` 来查看和交互API文档。
+*   **运行 `main.py` (批处理回测/参数优化):**
+    ```bash
+    make run-backtest-main
+    ```
+*   **获取最新市场数据:**
+    ```bash
+    make fetch-data
+    ```
+*   **从CSV初始化/加载数据到数据库:**
+    ```bash
+    make init-db-load-csv
+    ```
+
+**直接运行脚本 (传统方式):**
+
+*   运行主程序 (`main.py`):
+    ```bash
+    python3 main.py 
+    ```
+    这将使用 `main.py` 中配置的参数执行回测或参数优化。
+*   直接运行 FastAPI 服务 (不推荐用于日常开发，`make run-api`更好):
+    ```bash
+    # 确保在项目根目录执行
+    uvicorn backend.main_api:app --reload --host 0.0.0.0 --port 8000
+    ```
 
 ### 5. (可选) 退出虚拟环境
 当你完成工作后，可以停用虚拟环境：
@@ -230,10 +272,27 @@ deactivate
 ### 阶段三：Web UI 展示与交互
 
 *   **目标**: 构建一个简单的 Web 界面，用于展示回测结果，并允许用户通过界面选择策略、设置参数、启动回测。
-*   **主要模块**:
-    *   后端 API 服务 (e.g., FastAPI, Flask)
-    *   前端 Web UI (e.g., HTML/CSS/JS, 轻量级框架)
-*   **学习重点**: Web后端开发, 前端开发, API设计。
+*   **总体状态**: `[进行中 - 后端API基础已搭建，前端待开发]`
+*   **主要模块与任务**:
+    *   `✅` **后端 API 服务 (FastAPI)**:
+        *   `✅` **应用基础**: 搭建 FastAPI 应用，处理请求和响应。
+        *   `✅` **数据库初始化**: API启动时自动调用 `init_db()` 确保数据库就绪。
+        *   `✅` **策略查询接口**: 实现 `GET /api/v1/strategies` 端点，返回所有可用策略及其默认配置和参数网格信息 (从 `main.py` 的 `STRATEGY_CONFIG` 读取)。
+        *   `✅` **回测执行接口**: 实现 `POST /api/v1/backtest/run` 端点，用于接收回测请求:
+            *   `✅` **核心逻辑集成**: 调用从 `main.py` 重构出的 `execute_single_backtest_run` 函数，执行完整的单次回测流程（数据加载、信号生成、回测引擎、性能分析、报告和图表生成）。
+            *   `✅` **多股票支持**: 支持对请求中指定的单个或多个股票代码进行回测。
+            *   `✅` **动态结果目录**: 为每次API调用，在服务器端的 `results/api_runs/` 目录下创建一个基于策略、首个股票代码、时间戳和UUID的唯一子目录，用于存放该次运行生成的报告和图表文件。
+            *   `✅` **JSON响应**: 返回包含详细回测结果的JSON响应。对每个成功回测的股票，包含性能指标字典 (`metrics`)、以及指向生成的文本报告和图表的Web可访问URL路径 (例如 `/api_runs/<run_id>/report_RSI_MSFT_....txt`)。
+        *   `✅` **静态文件服务**: 配置FastAPI以提供对 `results/api_runs/` 目录下结果文件的静态访问，使得API返回的URL可以直接在浏览器中打开。
+    *   `✅` **Makefile 集成**:
+        *   `✅` 创建 `Makefile`，包含常用命令如 `make run-api`, `make run-backtest-main`, `make install-deps`, `make fetch-data` 等。
+        *   `✅` `Makefile` 中的命令配置为直接使用 `venv` 虚拟环境中的Python解释器和相关可执行文件，提高了便捷性和环境一致性。
+    *   `⏳` **前端 Web UI (React + Tailwind CSS)**:
+        *   **构思与设计**: 初步构思UI布局（导航、回测设置区、结果展示区）。
+        *   **(待办)** 组件开发：开发用于策略选择、参数输入、日期选择、股票代码输入的前端组件。
+        *   **(待办)** API交互：实现前端与后端API的通信，发送回测请求，接收并展示结果。
+        *   **(待办)** 结果可视化：在前端展示性能指标、渲染图表（可能直接使用图片URL，或考虑图表库）。
+*   **学习重点**: Web后端开发 (FastAPI), API设计与实现, 异步编程, Pydantic数据校验, 前端框架基础 (React), CSS框架 (Tailwind CSS), 前后端数据交互。
 
 ### 阶段四：高级功能与优化 (可选)
 

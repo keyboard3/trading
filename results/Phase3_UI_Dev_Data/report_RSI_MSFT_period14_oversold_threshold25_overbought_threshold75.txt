@@ -1,0 +1,19 @@
+--- RSI on MSFT
+Params: {'period': 14, 'oversold_threshold': 25, 'overbought_threshold': 75}, Capital: 100000 ---
+手续费设置: 费率=0.0500%, 最低收费=5.00元/笔
+---
+总收益率 (%): 0.41
+年化收益率 (%): 0.41
+最大回撤 (%): -0.98
+夏普比率 (年化): 0.44
+总交易次数: 1
+买入次数: 1
+卖出次数: 0
+胜率 (%): N/A (需交易配对)
+平均盈利 ($): N/A (需交易配对)
+平均亏损 ($): N/A (需交易配对)
+
+--- 交易记录 ---
+           symbol action  quantity       price         cost  commission
+timestamp                                                              
+2024-08-06   MSFT    BUY        10  397.297546  3972.975464         5.0

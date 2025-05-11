@@ -152,7 +152,7 @@ async def run_backtest_api(request: BacktestRequest):
 
         # Construct web-accessible URLs for report and charts if paths are returned
         api_accessible_result = {
-            "symbol": symbol_to_run,
+            "ticker": symbol_to_run,
             "metrics": single_run_result.get("metrics"),
             "error": single_run_result.get("error"),
             "report_url": None,

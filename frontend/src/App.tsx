@@ -94,17 +94,11 @@ function App() {
 
   return (
     <Layout>
-      <div className="text-center">
-        <div className="flex justify-center space-x-4 my-4">
-          <a href="https://vitejs.dev" target="_blank" rel="noopener noreferrer">
-            <img src={viteLogo} className="logo h-24" alt="Vite logo" />
-          </a>
-          <a href="https://react.dev" target="_blank" rel="noopener noreferrer">
-            <img src={reactLogo} className="logo react h-24" alt="React logo" />
-          </a>
-        </div>
-        <h1 className="text-blue-700 text-4xl font-bold my-4">回测配置区</h1>
-        <div className="p-6 bg-white shadow-lg rounded-md max-w-lg mx-auto text-left">
+      {/* 主容器，采用 Flexbox 实现左右布局 */}
+      <div className="flex flex-row flex-wrap md:flex-nowrap gap-6">
+        {/* 左侧：回测配置区 */}
+        <div className="w-full md:w-2/5 lg:w-1/3 flex flex-col gap-4 order-2 md:order-1 bg-white p-6 rounded-lg shadow-lg">
+          
           <StrategySelector 
             selectedStrategyId={selectedStrategy?.id || null} 
             onStrategySelect={handleStrategyChange} 
@@ -122,21 +116,17 @@ function App() {
             onEndDateChange={handleEndDateChange}
           />
           
-          <div className="mb-4 p-2 bg-gray-50 rounded text-xs">
-            <span className="font-semibold">日期范围:</span> {startDate} 至 {endDate}
+          {/* 显示当前选中的日期和股票代码信息 - 保持简洁 */}
+          <div className="my-2 p-3 bg-gray-50 rounded text-xs space-y-1">
+            <div><span className="font-semibold">日期范围:</span> {startDate} 至 {endDate}</div>
+            {stockSymbolsInput && <div><span className="font-semibold">当前代码:</span> {stockSymbolsInput}</div>}
           </div>
-          
-          {stockSymbolsInput && (
-             <div className="mb-4 p-2 bg-gray-50 rounded text-xs">
-               <span className="font-semibold">当前代码:</span> {stockSymbolsInput}
-             </div>
-          )}
 
           {selectedStrategy && (
-            <div className="mt-4 p-3 bg-gray-50 rounded">
-              <h3 className="text-md font-semibold text-gray-800">当前选中策略:</h3>
-              <p className="text-sm text-gray-600">ID: {selectedStrategy.id}</p>
-              <p className="text-sm text-gray-600">名称: {selectedStrategy.name}</p>
+            <div className="p-3 bg-indigo-50 rounded border border-indigo-200">
+              <h3 className="text-md font-semibold text-indigo-800">当前选中策略:</h3>
+              <p className="text-sm text-gray-700">ID: {selectedStrategy.id}</p>
+              <p className="text-sm text-gray-700">名称: {selectedStrategy.name}</p>
             </div>
           )}
 
@@ -144,15 +134,6 @@ function App() {
             strategy={selectedStrategy} 
             onParametersChange={handleParametersChange} 
           />
-          
-          {selectedStrategy && Object.keys(strategyParameters).length > 0 && (
-            <div className="mt-4 p-3 bg-gray-100 rounded">
-              <h3 className="text-md font-semibold text-gray-800">当前参数值:</h3>
-              <pre className="mt-2 text-xs bg-gray-200 p-2 rounded overflow-x-auto">
-                {JSON.stringify(strategyParameters, null, 2)}
-              </pre>
-            </div>
-          )}
 
           <RunBacktestButton
             strategyId={selectedStrategy?.id || null}
@@ -162,23 +143,14 @@ function App() {
             parameters={strategyParameters}
             onBacktestComplete={handleBacktestCompletion}
           />
-
-          {/* <div className="mt-6">
-            <button 
-              onClick={() => setCount((count) => count + 1)}
-              className="bg-indigo-500 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded transition duration-150 ease-in-out w-full"
-            >
-              示例计数器: {count}
-            </button>
-          </div> */}
         </div>
 
-        <ResultsDisplay response={backtestApiResponse} error={backtestApiError} />
-        
-        <p className="mt-8 text-gray-500">
-          Click on the Vite and React logos to learn more.
-        </p>
+        {/* 右侧：回测结果区 */}
+        <div className="w-full md:w-3/5 lg:w-2/3 order-1 md:order-2 flex-grow">
+          <ResultsDisplay response={backtestApiResponse} error={backtestApiError} />
+        </div>
       </div>
+    
     </Layout>
   )
 }

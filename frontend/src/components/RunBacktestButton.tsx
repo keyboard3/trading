@@ -3,8 +3,9 @@ import React, { useState } from 'react';
 export interface BacktestResultItem { 
   ticker: string;
   metrics: Record<string, string | number>;
-  report_url: string;
-  plot_urls: Record<string, string>;
+  report_url?: string;
+  portfolio_value_chart_url?: string; 
+  strategy_chart_url?: string; 
   error?: string;
 }
 export interface BacktestResponse { 

@@ -34,16 +34,7 @@ const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ response, error }) => {
   const resultsList = Array.isArray(response.results_per_symbol) ? response.results_per_symbol : [];
 
   return (
-    <div className="mt-8 p-6 bg-white shadow-lg rounded-md max-w-4xl mx-auto text-left">
-      <h2 className="text-2xl font-semibold text-gray-800 mb-4">回测结果</h2>
-      
-      {response.message && (
-        <div className="mb-4 p-3 bg-green-50 border border-green-300 text-green-700 rounded">
-          <p className="font-bold">状态: 成功</p>
-          <p>{response.message}</p>
-          {response.run_id_tag && <p className="text-sm mt-1">运行ID: {response.run_id_tag}</p>}
-        </div>
-      )}
+    <div className="p-6 bg-white shadow-lg rounded-md max-w-4xl mx-auto text-left">
 
       {resultsList.length === 0 && !response.message && (
          <p className="text-gray-600">没有返回具体的回测结果条目。</p>
@@ -91,26 +82,27 @@ const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ response, error }) => {
                     </a>
                   </p>
                 )}
-                {item.plot_urls && Object.keys(item.plot_urls).length > 0 && (
-                  <div className="mt-2 space-y-1">
-                    {Object.entries(item.plot_urls).map(([plotName, plotUrl]) => (
-                       plotUrl && typeof plotUrl === 'string' && ( // 确保 plotUrl 是有效字符串
-                        <p key={plotName} className="text-sm">
-                          <a 
-                            href={plotUrl} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="text-blue-600 hover:text-blue-800 hover:underline"
-                          >
-                            {/* 尝试将 plotName 变得更可读，例如 'portfolio_value_chart' -> 'Portfolio Value Chart' */}
-                            查看 {plotName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                          </a>
-                        </p>
-                       )
-                    ))}
+                {item.portfolio_value_chart_url && (
+                  <div className="my-3">
+                    <h5 className="text-sm font-semibold text-gray-600 mb-1">投资组合净值曲线:</h5>
+                    <img 
+                      src={item.portfolio_value_chart_url} 
+                      alt="投资组合净值曲线图" 
+                      className="w-full h-auto border rounded shadow-sm"
+                    />
                   </div>
                 )}
-                {!item.report_url && (!item.plot_urls || Object.keys(item.plot_urls).length === 0) && (
+                {item.strategy_chart_url && (
+                  <div className="my-3">
+                    <h5 className="text-sm font-semibold text-gray-600 mb-1">策略信号图:</h5>
+                    <img 
+                      src={item.strategy_chart_url} 
+                      alt="策略信号图" 
+                      className="w-full h-auto border rounded shadow-sm"
+                    />
+                  </div>
+                )}
+                {!item.report_url && !item.portfolio_value_chart_url && !item.strategy_chart_url && (
                     <p className="text-sm text-gray-500">无可用报告或图表链接。</p>
                 )}
               </div>

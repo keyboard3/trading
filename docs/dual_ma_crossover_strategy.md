@@ -40,7 +40,7 @@
 
 以下是由程序 `main.py` 针对示例数据中的 `STOCK_A` (默认参数: 短期MA=2, 长期MA=3) 生成的策略示意图。它在价格曲线上叠加了均线并标出了买卖信号点：
 
-![双均线(2-3)策略示意图 - STOCK_A](../results/MA_2_3_strategy_on_STOCK_A.png "MA 2-3 Strategy Visualization for STOCK_A")
+![双均线(2-3)策略示意图 - STOCK_A](images/MA_2_3_strategy_on_STOCK_A.png "MA 2-3 Strategy Visualization for STOCK_A")
 
 *(注：由于示例数据点非常少，此图可能仅能展示基本原理。在更长的数据集上，均线和信号会更平滑和典型。)*
 

@@ -1,9 +1,0 @@
-﻿股票代码,策略,参数,总回报率(%),年化回报率(%),夏普比率,最大回撤(%),总交易次数
-MSFT,RSI,"{'period': 14, 'oversold_threshold': 25, 'overbought_threshold': 70}",0.3821719360351562,0.3834868529042357,0.7408068511963372,-0.320852337776818,2
-MSFT,RSI,"{'period': 14, 'oversold_threshold': 25, 'overbought_threshold': 75}",0.40932464599609375,0.41073317661246556,0.4389794997484022,-0.9844172769484973,1
-MSFT,RSI,"{'period': 14, 'oversold_threshold': 30, 'overbought_threshold': 70}",0.8289501953125,0.8318086717263418,1.2489596270099919,-0.491468638666175,3
-MSFT,RSI,"{'period': 14, 'oversold_threshold': 30, 'overbought_threshold': 75}",0.37870269775390625,0.38000565563658384,0.40684233739086634,-0.9847171446697269,1
-MSFT,RSI,"{'period': 20, 'oversold_threshold': 25, 'overbought_threshold': 70}",0.0,0.0,N/A,0.0,0
-MSFT,RSI,"{'period': 20, 'oversold_threshold': 25, 'overbought_threshold': 75}",0.0,0.0,N/A,0.0,0
-MSFT,RSI,"{'period': 20, 'oversold_threshold': 30, 'overbought_threshold': 70}",0.40932464599609375,0.41073317661246556,0.4389794997484022,-0.9844172769484973,1
-MSFT,RSI,"{'period': 20, 'oversold_threshold': 30, 'overbought_threshold': 75}",0.40932464599609375,0.41073317661246556,0.4389794997484022,-0.9844172769484973,1

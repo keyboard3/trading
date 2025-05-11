@@ -154,7 +154,7 @@ deactivate
     运行 `python3 main.py` 后，程序将输出回测结果。核心成果包括：
 
     1.  **性能报告 (摘要)**:
-        程序会生成一份详细的性能报告并打印到控制台，同时保存在 `results/phase1_performance_report.txt`。以下是报告中指标部分的示例内容：
+        程序会生成一份详细的性能报告并打印到控制台，同时保存在 `docs/log/phase1_performance_report.txt`。以下是报告中指标部分的示例内容：
 
         ```text
         --- 回测性能报告 ---
@@ -169,15 +169,15 @@ deactivate
         平均盈利 ($): N/A (需交易配对)
         平均亏损 ($): N/A (需交易配对)
         ```
-        *(注：以上数值为基于 `data/sample_stock_data.csv` 和默认参数 (短期MA=2, 长期MA=3) 在特定执行下的一个示例，实际数值会根据数据和参数变化。完整的报告（包含交易日志）请查看 `results/phase1_performance_report.txt` 文件。)*
+        *(注：以上数值为基于 `data/sample_stock_data.csv` 和默认参数 (短期MA=2, 长期MA=3) 在特定执行下的一个示例，实际数值会根据数据和参数变化。完整的报告（包含交易日志）请查看 `docs/log/phase1_performance_report.txt` 文件。)*
 
     2.  **投资组合净值图**:
         展示了策略执行过程中投资组合总价值的变化情况。
-        ![投资组合净值图](results/MA_2_3_portfolio_value.png "投资组合净值图")
+        ![投资组合净值图](docs/images/MA_2_3_portfolio_value.png "投资组合净值图")
 
     3.  **策略信号图 (针对 STOCK_A)**:
         在特定股票的价格图上标出买卖信号点，直观展示策略的决策过程。
-        ![双均线(2-3)策略示意图 - STOCK_A](results/MA_2_3_strategy_on_STOCK_A.png "MA 2-3 Strategy Visualization for STOCK_A")
+        ![双均线(2-3)策略示意图 - STOCK_A](docs/images/MA_2_3_strategy_on_STOCK_A.png "MA 2-3 Strategy Visualization for STOCK_A")
 
 ### 阶段二：数据管理与策略库增强
 
@@ -229,7 +229,7 @@ deactivate
 *   **学习重点**: SQLite数据库操作 (创建表, 插入数据, 查询数据), 使用 `yfinance` 获取数据, 实现和参数化RSI等新策略, 理解交易成本和[滑点](docs/slippage_explained.md)对回测的影响, 参数优化（遍历）的基本概念及实现, Pandas和Matplotlib进阶用于结果汇总和对比展示。
 
 *   **成果示例**:
-    当配置 `main.py` 执行参数优化后 (例如 `PERFORM_OPTIMIZATION = True`)，程序运行后会在 `results/` 目录下创建一个由 `CURRENT_RUN_TAG` 指定的子文件夹 (例如 `results/RSI_MSFT_ParamOpt_SmallSet/`)，其中包含该次优化运行的所有产出。主要成果包括：
+    当配置 `main.py` 执行参数优化后 (例如 `PERFORM_OPTIMIZATION = True`)，程序运行后会在临时结果目录下创建一个由 `CURRENT_RUN_TAG` 指定的子文件夹 (例如 `RSI_MSFT_ParamOpt_SmallSet/`)，其中包含该次优化运行的所有产出。主要的存档成果示例包括：
 
     1.  **参数优化概要 (控制台输出)**:
         程序会在控制台打印出基于主要评价指标（如夏普比率）排序的最佳参数组合：
@@ -243,7 +243,7 @@ deactivate
         *(注：以上数值及参数为示例，实际结果会随数据和参数配置而变化。)*
 
     2.  **参数优化详细汇总 (CSV文件)**:
-        所有参数组合的回测性能指标会保存在一个CSV文件中，路径类似于 `results/RSI_MSFT_ParamOpt_SmallSet/all_backtests_summary_RSI_OPTIMIZED.csv`。其内容结构大致如下：
+        所有参数组合的回测性能指标会保存在一个CSV文件中，示例路径为 `docs/log/all_backtests_summary_RSI_OPTIMIZED.csv`。其内容结构大致如下：
         ```csv
         股票代码,策略,参数,总回报率(%),年化回报率(%),夏普比率,最大回撤(%),买入次数,卖出次数
         MSFT,RSI,"{'period': 20, 'oversold_threshold': 30, 'overbought_threshold': 75}",25.87,15.61,0.787808,-12.893035,7,7
@@ -253,7 +253,7 @@ deactivate
         ```
 
     3.  **单次回测报告 (含交易成本)**:
-        对于参数优化过程中的每一次独立回测，都会生成详细的文本报告，例如 `results/RSI_MSFT_ParamOpt_SmallSet/report_RSI_MSFT_period20_oversold_threshold30_overbought_threshold75.txt`。报告中包含了手续费信息和带手续费的交易记录：
+        对于参数优化过程中的每一次独立回测，都会生成详细的文本报告，例如 `docs/log/report_RSI_MSFT_period20_oversold_threshold30_overbought_threshold75.txt`。报告中包含了手续费信息和带手续费的交易记录：
         ```text
         --- RSI 策略在 MSFT上的回测报告
         参数: {'period': 20, 'oversold_threshold': 30, 'overbought_threshold': 75}
@@ -278,13 +278,13 @@ deactivate
         ```
 
     4.  **参数影响可视化**: 
-        程序会为每个优化的参数生成其对关键指标影响的图表，例如 `results/RSI_MSFT_ParamOpt_SmallSet/param_impact_SharpeRatio_vs_period_for_MSFT_all_others_averaged.png`。
-        ![RSI Period vs Sharpe Ratio (MSFT)](results/RSI_MSFT_ParamOpt_SmallSet/param_impact_SharpeRatio_vs_period_for_MSFT_all_others_averaged.png "RSI Period vs Sharpe Ratio for MSFT")
+        程序会为每个优化的参数生成其对关键指标影响的图表，例如 `docs/images/param_impact_SharpeRatio_vs_period_for_MSFT_all_others_averaged.png`。
+        ![RSI Period vs Sharpe Ratio (MSFT)](docs/images/param_impact_SharpeRatio_vs_period_for_MSFT_all_others_averaged.png "RSI Period vs Sharpe Ratio for MSFT")
         *(此图展示了当RSI策略的`period`参数变化时，在MSFT股票上，平均夏普比率如何随之变化，其他参数取平均效果。)*
 
     5.  **投资组合价值图 (示例)**:
-        每次独立回测也会生成投资组合价值图，例如 `results/RSI_MSFT_ParamOpt_SmallSet/portfolio_RSI_MSFT_period20_oversold_threshold30_overbought_threshold75.png`。
-        ![Portfolio Value RSI on MSFT (Example)](results/RSI_MSFT_ParamOpt_SmallSet/portfolio_RSI_MSFT_period20_oversold_threshold30_overbought_threshold75.png "Portfolio Value for RSI on MSFT with specific parameters")
+        每次独立回测也会生成投资组合价值图，例如 `docs/images/portfolio_RSI_MSFT_period20_oversold_threshold30_overbought_threshold75.png`。
+        ![Portfolio Value RSI on MSFT (Example)](docs/images/portfolio_RSI_MSFT_period20_oversold_threshold30_overbought_threshold75.png "Portfolio Value for RSI on MSFT with specific parameters")
 
 ### 阶段三：Web UI 展示与交互
 
@@ -332,7 +332,3 @@ deactivate
     *   交易接口对接
     *   日志与监控
 *   **学习重点**: 流式处理, 高级模型, 交易API, 系统监控。
-
----
-
-详细的架构决策、技术选型和设计规范将在 `ARCHITECTURE.md` 文件中逐步记录和完善。

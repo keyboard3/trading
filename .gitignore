@@ -24,21 +24,21 @@ dist/
 
 # Distribution / packaging
 .Python
-env/
-build/
+# env/ # Covered by Virtual Environment
+# build/ # Duplicate
 develop-eggs/
-dist/
+# dist/ # Duplicate
 downloads/
 eggs/
-lib/
-lib64/
+# lib/ # Generally too broad for a generic .gitignore
+# lib64/ # Generally too broad
 parts/
 sdist/
 var/
 wheels/
 pip-wheel-metadata/
 share/python-wheels/
-*.egg-info/
+# *.egg-info/ # Duplicate
 .installed.cfg
 *.egg
 MANIFEST
@@ -47,7 +47,7 @@ MANIFEST
 #  Usually these files are in a .spec file. Try adding this to your spec file instead:
 #  upx=True,
 #  upx_exclude=[],
-#  cython_<y_bin_226>exclude=[],
+#  cython_exclude=[],
 *.manifest
 *.spec
 
@@ -69,5 +69,5 @@ coverage.xml
 # Jupyter Notebook
 .ipynb_checkpoints
 
-#结果目录，如果不想追踪的话
-# results/ 
+# Ignore all results directory content (temporary strategy outputs)
+results/ 

@@ -110,11 +110,8 @@ const RunBacktestButton: React.FC<RunBacktestButtonProps> = ({
   return (
     <button
       onClick={handleRunBacktest}
-      className={`w-full mt-8 px-6 py-3 border border-transparent rounded-md shadow-sm text-base font-medium text-white`}
-      style={{
-        backgroundColor: isLoading ? 'gray' : 'lightblue',
-        cursor: isLoading ? 'not-allowed' : 'pointer',
-      }}
+      disabled={isLoading}
+      className={`w-full mt-8 px-6 py-3 border border-transparent rounded-md shadow-sm text-base font-medium text-white transition-colors duration-150 ease-in-out ${isLoading ? 'bg-blue-300 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500'}`}
     >
       {isLoading ? '正在执行回测...' : '运行回测'}
     </button>

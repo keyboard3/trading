@@ -1,6 +1,54 @@
 import pandas as pd
 import numpy as np
 
+def _calculate_rsi_values(close_prices: pd.Series, period: int = 14) -> pd.Series:
+    """
+    计算给定收盘价序列的RSI值。
+
+    参数:
+    close_prices (pd.Series): 收盘价格序列。
+    period (int): RSI 计算的周期长度，默认为14。
+
+    返回:
+    pd.Series: 包含RSI值的序列，索引与输入序列一致。
+    """
+    if not isinstance(close_prices, pd.Series):
+        raise TypeError("输入 close_prices 必须是 pandas Series。")
+    if close_prices.empty:
+        return pd.Series(dtype=np.float64, index=close_prices.index) # 返回空的RSI Series
+
+    # 1. 计算价格变化
+    delta = close_prices.diff()
+
+    # 2. 分离上涨和下跌
+    gain = pd.Series(np.where(delta > 0, delta, 0), index=close_prices.index)
+    loss = pd.Series(np.where(delta < 0, -delta, 0), index=close_prices.index)
+
+    # 3. 计算平均上涨和平均下跌 (使用Wilder's smoothing / EWMA)
+    # Wilder's smoothing (alpha = 1/N) 等价于 ewm(com=N-1)
+    avg_gain = gain.ewm(com=period - 1, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(com=period - 1, min_periods=period, adjust=False).mean()
+
+    # 4. 计算相对强度 (RS)
+    # 避免除以0的情况
+    rs = avg_gain / avg_loss
+    
+    # 5. 计算RSI
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    
+    # 处理特殊情况：当 avg_loss 为 0 时
+    # 如果 avg_gain > 0 且 avg_loss == 0, rs 为 inf, rsi 应该为 100.
+    # 如果 avg_gain == 0 且 avg_loss == 0 (例如，价格在周期内无变化), rs 为 NaN, rsi 应该为中性值(如50)或NaN。
+    # pandas的 1.0 / (1.0 + np.inf) 结果是 0.0, 所以 rsi = 100.0，这是正确的。
+    # 当 rs 是 NaN (因为 avg_gain 和 avg_loss 都是0), rsi 也是 NaN。这是合理的，因为没有足够信息。
+    # 可以考虑在rs为0（avg_gain为0，avg_loss > 0）时rsi为0。100 - (100 / (1+0)) = 0，也是正确的。
+    
+    # 如果需要将 avg_gain 和 avg_loss 都为0时产生的NaN RSI视作50 (中性):
+    # rsi.loc[avg_gain.eq(0) & avg_loss.eq(0) & rsi.isna()] = 50.0
+    # 但通常让它保持NaN，表示数据不足或无波动。
+
+    return rsi
+
 def rsi_strategy(data: pd.DataFrame, period: int = 14, 
                  oversold_threshold: float = 30, 
                  overbought_threshold: float = 70) -> pd.DataFrame:
@@ -19,68 +67,14 @@ def rsi_strategy(data: pd.DataFrame, period: int = 14,
     """
     if 'close' not in data.columns:
         raise ValueError("输入数据 DataFrame 中必须包含 'close' 列")
+    if not isinstance(data, pd.DataFrame):
+        raise TypeError("输入 data 必须是 pandas DataFrame。")
 
     df = data.copy()
 
-    # 1. 计算价格变化
-    delta = df['close'].diff()
-
-    # 2. 分离上涨和下跌
-    # gain = delta.where(delta > 0, 0)
-    # loss = -delta.where(delta < 0, 0)
-    # 更精确的写法，确保第一个NaN不影响后续计算的对齐
-    gain = pd.Series(np.where(delta > 0, delta, 0), index=df.index)
-    loss = pd.Series(np.where(delta < 0, -delta, 0), index=df.index)
-
-    # 3. 计算平均上涨和平均下跌 (使用Wilder's smoothing / EWMA)
-    # 初始的N日简单平均
-    # avg_gain_initial = gain.rolling(window=period, min_periods=period).mean().iloc[period-1]
-    # avg_loss_initial = loss.rolling(window=period, min_periods=period).mean().iloc[period-1]
-    # df['avg_gain'] = np.nan
-    # df['avg_loss'] = np.nan
-    # df['avg_gain'].iloc[period-1] = avg_gain_initial
-    # df['avg_loss'].iloc[period-1] = avg_loss_initial
-    # for i in range(period, len(df)):
-    #     df['avg_gain'].iloc[i] = (df['avg_gain'].iloc[i-1] * (period - 1) + gain.iloc[i]) / period
-    #     df['avg_loss'].iloc[i] = (df['avg_loss'].iloc[i-1] * (period - 1) + loss.iloc[i]) / period
-
-    # 使用 pandas.ewm 更简洁地实现 Wilder's smoothing
-    # Wilder's smoothing (alpha = 1/N) 等价于 ewm(com=N-1)
-    avg_gain = gain.ewm(com=period - 1, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(com=period - 1, min_periods=period, adjust=False).mean()
-
-    # 4. 计算相对强度 (RS)
-    # 避免除以0的情况，如果 avg_loss 为0，RS应为无穷大 (RSI 接近100)
-    rs = avg_gain / avg_loss
-    rs.replace([np.inf, -np.inf], np.nan, inplace=True) # 处理avg_loss为0导致的inf
-    # 如果avg_loss为0, avg_gain > 0 => rs = inf => rsi = 100
-    # 如果avg_loss为0, avg_gain = 0 => rs = nan (因为0/0) => rsi = ? (pandas 处理方式)
-    # 我们可以在计算RSI时处理这种情况，或者直接将rs为nan且avg_gain>0的情况设为很大的数
-
-    # 5. 计算RSI
-    # rsi = 100 - (100 / (1 + rs))
-    # 更稳健的 RSI 计算，处理 RS 为 NaN (因 avg_loss 为 0 导致) 的情况
-    df['rsi'] = 100 - (100 / (1 + rs))
-    # 当 avg_loss 为 0 时：
-    # 如果 avg_gain > 0, rs 为 inf, 1/(1+inf) -> 0, rsi -> 100.
-    # 如果 avg_gain = 0 (即 delta连续N期或更多为0或负), avg_gain ewm 可能为0, rs 为 0/0 -> NaN.
-    #   此时，如果严格按公式，RS = 0 (因为没有上涨), RSI = 0.
-    #   或者，若前N期全为下跌，则avg_gain=0, avg_loss>0 => RS=0 => RSI=0
-    #   若前N期全为上涨，则avg_gain>0, avg_loss=0 => RS=inf => RSI=100 (pandas已处理)
-    #   若前N期全无变化，则avg_gain=0, avg_loss=0 => RS=NaN, RSI=NaN (pandas已处理)
-    #   我们需要确保 RSI 在 [0, 100] 区间内，并且在 avg_loss 为 0 且 avg_gain 为 0 时表现合理 (例如 RSI 为 50 或 0)
-    #   实际上，ewm(adjust=False) 在开始阶段如果值全为0，会输出0。如果delta连续为0，gain和loss都是0，avg_gain和avg_loss也是0，rs是nan，rsi是nan。
-    #   如果一段时期完全没有价格变动，RSI应该是中性的，比如50。但标准公式在avg_gain=avg_loss=0时会导致NaN。
-    #   对于这种情况，一种处理是如果 rs is NaN and avg_gain == 0 and avg_loss == 0，则 RSI = 50 (中性)
-    #   但更常见的做法是，如果 avg_loss 是0，则 RSI 几乎是100（除非 avg_gain 也是0）。
-    #   如果 avg_gain 是0 且 avg_loss 是0 (例如，价格在期初没有变化)，RSI 应该为 NaN，直到有足够数据。
-    #   pandas 的 ewm 应该能优雅处理这些情况， NaN 会在早期出现。
+    # 使用新的辅助函数计算RSI值
+    df['rsi'] = _calculate_rsi_values(df['close'], period)
     
-    # 传统定义下，如果 avg_loss = 0, 那么 RSI = 100 (除非 avg_gain 也为0，此时 RSI 未定义或视为 0 或 50)
-    # 如果 rs 为 NaN (因为 avg_loss 和 avg_gain 都为0, 例如初始N期没有价格变动), 则 RSI 为 NaN.
-    # 如果 rs 为 NaN (因为 avg_loss 为 0 而 avg_gain > 0), pandas的 1/(1+inf) 会是0, RSI会是100.
-    # 我们需要确保 RSI 不会因为 avg_loss 非常接近0而跳到极端值，ewm应能平滑此行为。
-
     # 6. 生成交易信号
     # 简单信号逻辑：当RSI上穿超卖线时买入，下穿超买线时卖出
     df['signal'] = 0
@@ -98,8 +92,6 @@ def rsi_strategy(data: pd.DataFrame, period: int = 14,
     # 移除辅助列
     df.drop(columns=['rsi_prev'], inplace=True, errors='ignore')
 
-    # print(df.tail())
-    # print(df[df['signal'] != 0].head())
     return df
 
 if __name__ == '__main__':
@@ -111,37 +103,53 @@ if __name__ == '__main__':
         '2023-01-16', '2023-01-17', '2023-01-18', '2023-01-19', '2023-01-20',
         '2023-01-21', '2023-01-22', '2023-01-23', '2023-01-24', '2023-01-25'
     ])
-    close_prices = [
+    close_prices_list = [ # Renamed to avoid conflict with pd.Series name
         100, 102, 101, 103, 105, 104, 106, 108, 110, 107, # 持续上涨
         105, 103, 100, 98,  95,  93,  90,  92,  94,  97,  # 下跌后反弹
         95,  93,  90, 88, 85 # 持续下跌
     ]
-    sample_data = pd.DataFrame(data={'close': close_prices}, index=dates)
+    sample_data = pd.DataFrame(data={'close': close_prices_list}, index=dates)
 
-    print("--- 测试 RSI 策略模块 ---")
+    print("--- 测试 RSI 策略模块 (重构后) ---")
     print("原始数据 (部分):")
     print(sample_data.head())
 
-    # 测试默认参数
+    # 测试 _calculate_rsi_values 函数
+    print("\n--- 测试 _calculate_rsi_values ---")
+    rsi_series = _calculate_rsi_values(sample_data['close'], period=14)
+    print("RSI Series (部分):")
+    print(rsi_series.tail(15))
+    
+    # 验证RSI值
+    if rsi_series.notna().any():
+        print(f"RSI Series min: {rsi_series.min():.2f}, max: {rsi_series.max():.2f}")
+        assert rsi_series.dropna().between(0, 100).all(), "RSI值 (from _calculate_rsi_values) 超出0-100范围"
+        print("RSI值 (from _calculate_rsi_values) 验证通过 (在0-100之间，排除NaN)。")
+    else:
+        print("RSI Series (from _calculate_rsi_values) 全为NaN，无法验证范围。")
+
+
+    # 测试 rsi_strategy 函数 (现在使用 _calculate_rsi_values)
+    print("\n--- 测试 rsi_strategy (使用重构的RSI计算) ---")
     rsi_data_default = rsi_strategy(sample_data.copy())
-    print("\\n应用RSI策略后 (默认参数, period=14, os=30, ob=70) - 部分数据:")
-    print(rsi_data_default.tail(15)) # 打印最后15条，更容易看到RSI值和信号
-    print("\\n产生的信号 (默认参数):")
+    print("\n应用RSI策略后 (默认参数, period=14, os=30, ob=70) - 部分数据:")
+    print(rsi_data_default.tail(15))
+    print("\n产生的信号 (默认参数):")
     print(rsi_data_default[rsi_data_default['signal'] != 0])
 
     # 测试不同参数
     rsi_data_short = rsi_strategy(sample_data.copy(), period=7, oversold_threshold=25, overbought_threshold=75)
-    print("\\n应用RSI策略后 (period=7, os=25, ob=75) - 部分数据:")
+    print("\n应用RSI策略后 (period=7, os=25, ob=75) - 部分数据:")
     print(rsi_data_short.tail(15))
-    print("\\n产生的信号 (period=7):")
+    print("\n产生的信号 (period=7):")
     print(rsi_data_short[rsi_data_short['signal'] != 0])
     
-    # 测试RSI值是否在0-100之间 (排除NaN)
-    print(f"\\nRSI (默认) min: {rsi_data_default['rsi'].min():.2f}, max: {rsi_data_default['rsi'].max():.2f}")
+    # 测试RSI值是否在0-100之间 (排除NaN) from rsi_strategy output
+    print(f"\nRSI (默认, from rsi_strategy) min: {rsi_data_default['rsi'].min():.2f}, max: {rsi_data_default['rsi'].max():.2f}")
     if rsi_data_default['rsi'].notna().any():
-        assert rsi_data_default['rsi'].dropna().between(0, 100).all(), "RSI值超出0-100范围"
-        print("RSI值 (默认) 验证通过 (在0-100之间，排除NaN)。")
+        assert rsi_data_default['rsi'].dropna().between(0, 100).all(), "RSI值 (from rsi_strategy) 超出0-100范围"
+        print("RSI值 (默认, from rsi_strategy) 验证通过 (在0-100之间，排除NaN)。")
     else:
-        print("RSI值 (默认) 全为NaN，无法验证范围。")
+        print("RSI值 (默认, from rsi_strategy) 全为NaN，无法验证范围。")
 
-    print("\\n--- RSI 策略模块测试结束 ---") 
+    print("\n--- RSI 策略模块测试结束 (重构后) ---") 

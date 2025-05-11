@@ -2,12 +2,12 @@
 
 ## 项目设置与运行 (Setup and Run)
 
-+### 0. 先决条件 (Prerequisites)
-+在开始之前，请确保您的系统已安装以下软件：
-+*   **Python**: 版本 3.9 或更高。
-+*   **Node.js**: 版本 18.x 或 LTS 版本。
-+*   **npm**: 通常随 Node.js 一同安装。npm 用于管理前端项目的依赖。
-+
+### 0. 先决条件 (Prerequisites)
+在开始之前，请确保您的系统已安装以下软件：
+*   **Python**: 版本 3.10 或更高。
+*   **Node.js**: 版本 18.x 或 LTS 版本。
+*   **npm**: 通常随 Node.js 一同安装。npm 用于管理前端项目的依赖。
+
 为了运行本项目，建议遵循以下步骤设置环境并安装依赖：
 
 ### 1. 克隆仓库 (如果需要)
@@ -323,21 +323,45 @@ deactivate
 
 ### 阶段四：实时数据处理与模拟交易系统
 
-*   **总目标**: 建立接收和处理实时市场数据的能力，并实现一个模拟交易环境，允许策略在实时数据上执行模拟下单，跟踪模拟账户的盈亏和持仓。
+*   **总目标**: 构建一个能够接入模拟实时数据流的交易系统，允许用户通过Web UI选择并运行不同的交易策略，动态观察模拟交易过程，并为未来的实盘交易做准备。
+*   **总体状态**: `[阶段性完成]`
 *   **主要模块与任务**:
-    *   `[ ]` **1. 实时数据接入与处理**:
-        *   选择并集成一个实时数据源 (例如模拟数据流、交易所/券商的WebSocket API)。
-        *   实现数据的实时获取、解析、初步存储/缓存，并适配策略使其能基于实时数据流生成信号。
-    *   `[ ]` **2. 模拟账户与订单管理**:
-        *   设计模拟账户结构（资金、持仓、交易历史）并实现模拟订单类型（市价、限价）。
-        *   开发订单执行逻辑（基于实时价格撮合模拟订单）。
-    *   `[ ]` **3. 实时模拟盈亏更新与结果展示**:
-        *   根据模拟成交实时更新账户状态，并提供API或界面展示模拟账户信息、历史交易及盈亏。
-*   **学习重点**: WebSocket编程, 实时数据流处理, 事件驱动架构, 模拟交易系统设计, 状态管理。
+    *   `✅` **1. 模拟实时数据提供者 (`MockRealtimeDataProvider`)**:
+        *   **目的**: 实现一个可配置的模拟数据源，能够以指定的时间间隔和波动率为多个虚拟股票代码生成价格 Ticks。
+        *   **产出**: `core_engine/realtime_feed.py` 中的 `MockRealtimeDataProvider` 类，能够生成 `DataTick` 对象 (namedtuple)。
+    *   `✅` **2. 实时策略基类与适配 (`RealtimeDataProviderBase`, `RealtimeSimpleMAStrategy`, `RealtimeRSIStrategy`)**:
+        *   **目的**: 定义实时数据提供者的抽象接口，并将现有的回测策略（如MA、RSI）适配为可以接收实时Tick数据并产生信号的实时版本。
+        *   **产出**: `core_engine/realtime_feed_base.py` (抽象基类), `strategies/simple_ma_strategy.py` 中的 `RealtimeSimpleMAStrategy`，以及 `strategies/realtime_rsi_strategy.py` 中的 `RealtimeRSIStrategy`。核心计算逻辑（如RSI计算）被重构以便于回测和实时模式共享。
+    *   `✅` **3. 模拟投资组合与交易引擎 (`MockPortfolio`, `MockTradingEngine`)**:
+        *   **目的**: 实现能够根据实时策略信号执行模拟交易、管理持仓和现金、记录交易日志的组件。
+        *   **产出**: `core_engine/portfolio.py` 中的 `MockPortfolio` 和 `core_engine/trading_engine.py` 中的 `MockTradingEngine`。
+    *   `✅` **4. 后端API支持实时模拟**: 
+        *   **目的**: 在FastAPI后端添加用于管理和查询实时模拟状态的API端点。
+        *   **产出**: `backend/main_api.py` 中新增：
+            *   策略注册表 (`STRATEGY_REGISTRY`)，用于动态加载和配置实时策略 (已支持MA和RSI)。
+            *   API端点如 `GET /api/simulation/available_strategies`, `POST /api/simulation/start`, `POST /api/simulation/stop`, `GET /api/simulation/status`。
+            *   管理全局模拟会话的逻辑，包括组件的动态实例化、启停和状态持久化（例如，停止模拟后保留投资组合状态以便查看，启动新模拟或关闭应用时则完全清除）。
+    *   `✅` **5. 前端UI支持实时模拟**: 
+        *   **目的**: 在React前端实现用于控制和展示实时模拟交易的用户界面。
+        *   **产出**:
+            *   `frontend/src/components/StrategyControlPanel.tsx`: 允许用户从后端获取的策略列表中选择策略（MA、RSI）、动态配置其参数（包括以"万元"为单位的初始资金）、启动/停止模拟。
+            *   `frontend/src/components/SimulationDisplay.tsx` (及其子组件: `PortfolioSummary`, `HoldingsTable`, `TradesList`, `StrategyInfoDisplay`): 动态展示模拟的投资组合摘要、详细持仓、最近交易记录和当前运行的策略信息。模拟停止后仍显示最后状态。
+            *   `frontend/src/App.tsx`: 实现"历史回测结果"和"实时模拟交易"的Tab切换，优化了组件渲染逻辑。
+            *   对各类UI提示、加载状态、禁用控件样式等进行了优化，提升用户体验。
+    *   `[ ]` **6. (后续) 模拟交易功能增强与细节完善**: 
+        *   例如：UI支持清除/重置投资组合状态、更详细的错误反馈和日志展示到前端、多种模拟数据生成模式、更复杂的订单类型模拟等。
+*   **学习重点**: 实时系统设计、线程与并发基础（数据提供者）、回调机制、状态管理（前端与后端）、WebSocket或轮询API设计、Pydantic模型在FastAPI中的应用、React组件化与状态钩子 (useState, useEffect, useCallback)、TypeScript接口定义。
+*   **成果示例**:
+    用户现在可以通过Web界面的"实时模拟交易"标签页，从下拉菜单中选择"实时简单移动平均线策略"或"实时RSI震荡策略"，配置其参数如股票代码、均线窗口或RSI周期、超买超卖阈值等，设定初始资金（以万元为单位）后启动模拟。启动后，界面会动态更新当前的投资组合价值、现金、详细持仓、最近发生的模拟交易记录以及当前运行的策略详情。当模拟停止后，这些最终状态信息会被保留在界面上供用户查看。
+
+    下图展示了正在运行"实时RSI震荡策略"时的用户界面：
+
+    ![实时模拟交易界面截图](docs/images/phase4_realtime_simulation_ui_rsi.png "实时模拟交易界面 - RSI策略运行中") 
+    *(注: 上图展示了选择RSI策略，并针对MSFT股票进行模拟交易的场景。左侧为策略选择和控制面板，右侧实时显示投资组合、持仓、交易日志和当前策略参数等动态信息。)*
 
 ### 阶段五：模拟交易增强：投资组合与风险管理
 
-*   **总目标**: 在模拟交易系统基础上，实现更细致的多品种投资组合跟踪和初步的实时风险控制规则。
+*   **总目标**: 进一步增强模拟交易系统的真实性和实用性，引入更复杂的投资组合管理功能和初步的风险控制机制。
 *   **主要模块与任务**:
     *   `[ ]` **1. 实时投资组合分析 (模拟)**:
         *   支持多品种持仓的统一管理与展示，计算投资组合整体实时盈亏、各品种占比等。

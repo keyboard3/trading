@@ -53,4 +53,12 @@ init-db-load-csv: check-venv
 	@echo "Running data loading script (core_engine/data_loader.py) (using $(PYTHON_EXEC))..."
 	$(PYTHON_EXEC) -m core_engine.data_loader
 
+realtime-backtest: check-venv
+	@echo "Running realtime backtesting script (core_engine/realtime_backtest.py) (using $(PYTHON_EXEC))..."
+	$(PYTHON_EXEC) main_realtime_test.py
+
+test: check-venv
+	@echo "Running portfolio manager script (core_engine/portfolio_manager.py) (using $(PYTHON_EXEC))..."
+	$(PYTHON_EXEC) -m core_engine.trading_engine
+
 # You can add other commands here, like for running tests, linting, etc. 

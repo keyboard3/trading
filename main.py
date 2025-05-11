@@ -71,6 +71,7 @@ END_DATE = None   # 使用数据库中最新的日期
 # --- 交易成本参数 ---
 COMMISSION_RATE_PCT = 0.0005 # 万分之五 (0.05%)
 MIN_COMMISSION_PER_TRADE = 5.0   # 最低手续费5元
+DEFAULT_SLIPPAGE_PCT = 0.0001 # 默认滑点百分比: 0.01% (万分之一)
 
 RESULTS_DIR = "results" # 顶层结果目录
 CURRENT_RUN_TAG = "Phase3_UI_Dev_Data" # <<< 更新：反映当前为阶段三UI开发准备数据
@@ -97,7 +98,8 @@ def execute_single_backtest_run(
     end_date: str = None,
     initial_capital: float = INITIAL_CAPITAL,
     commission_rate_pct: float = COMMISSION_RATE_PCT,
-    min_commission_per_trade: float = MIN_COMMISSION_PER_TRADE
+    min_commission_per_trade: float = MIN_COMMISSION_PER_TRADE,
+    slippage_pct: float = DEFAULT_SLIPPAGE_PCT # 新增滑点参数
 ) -> dict:
     """
     执行单次回测（单个股票，单个参数集），并返回结果。
@@ -151,7 +153,8 @@ def execute_single_backtest_run(
         data_with_signals,
         initial_capital,
         commission_rate_pct=commission_rate_pct,
-        min_commission=min_commission_per_trade
+        min_commission=min_commission_per_trade,
+        slippage_pct=slippage_pct # 传递滑点参数
     )
     if portfolio_history is None:
         error_msg = f"为 {symbol} 执行回测失败。"
@@ -183,7 +186,8 @@ def execute_single_backtest_run(
         trades, 
         title=f"{report_title_main}\n{report_title_params}",
         commission_rate_pct=commission_rate_pct,
-        min_commission=min_commission_per_trade
+        min_commission=min_commission_per_trade,
+        slippage_pct=slippage_pct # 传递给报告生成函数
     )
     print(performance_report_text) # 打印到控制台 (保持中文)
     
@@ -304,7 +308,8 @@ def main():
                 end_date=END_DATE,
                 initial_capital=INITIAL_CAPITAL,
                 commission_rate_pct=COMMISSION_RATE_PCT,
-                min_commission_per_trade=MIN_COMMISSION_PER_TRADE
+                min_commission_per_trade=MIN_COMMISSION_PER_TRADE,
+                slippage_pct=DEFAULT_SLIPPAGE_PCT # 传递滑点参数
             )
 
             if single_run_output["error"]:

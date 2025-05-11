@@ -30,6 +30,7 @@ function App() {
   const oneYearAgo = new Date(new Date().setFullYear(today.getFullYear() - 1))
   const [startDate, setStartDate] = useState<string>(formatDate(oneYearAgo))
   const [endDate, setEndDate] = useState<string>(formatDate(today))
+  const [slippagePctInput, setSlippagePctInput] = useState<string>("0.0001") // 默认0.01%
 
   const [backtestApiResponse, setBacktestApiResponse] = useState<BacktestResponse | null>(null)
   const [backtestApiError, setBacktestApiError] = useState<string | null>(null)
@@ -80,6 +81,13 @@ function App() {
     console.log("End date in App:", date)
   }, [])
 
+  const handleSlippagePctChange = useCallback((value: string) => {
+    setSlippagePctInput(value)
+    setBacktestApiResponse(null) // 清除旧结果
+    setBacktestApiError(null)
+    console.log("Slippage Pct in App:", value)
+  }, [])
+
   const handleBacktestCompletion = useCallback((response: BacktestResponse | null, error?: string) => {
     if (error) {
       setBacktestApiError(error)
@@ -116,6 +124,24 @@ function App() {
             onEndDateChange={handleEndDateChange}
           />
           
+          {/* 新增：滑点输入 */}
+          <div className="mt-4">
+            <label htmlFor="slippage-pct-input" className="block text-sm font-medium text-gray-700">
+              滑点百分比 (例如 0.0001 表示 0.01%):
+            </label>
+            <input
+              type="number"
+              id="slippage-pct-input"
+              name="slippagePct"
+              value={slippagePctInput}
+              onChange={(e) => handleSlippagePctChange(e.target.value)}
+              placeholder="例如: 0.0001"
+              step="0.00001"
+              min="0"
+              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            />
+          </div>
+          
           {/* 显示当前选中的日期和股票代码信息 - 保持简洁 */}
           <div className="my-2 p-3 bg-gray-50 rounded text-xs space-y-1">
             <div><span className="font-semibold">日期范围:</span> {startDate} 至 {endDate}</div>
@@ -141,6 +167,7 @@ function App() {
             startDate={startDate}
             endDate={endDate}
             parameters={strategyParameters}
+            slippagePct={parseFloat(slippagePctInput) || 0}
             onBacktestComplete={handleBacktestCompletion}
           />
         </div>

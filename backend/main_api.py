@@ -22,7 +22,8 @@ try:
         init_db as main_init_db,                 # Use imported one
         COMMISSION_RATE_PCT as DEFAULT_COMMISSION_RATE,
         MIN_COMMISSION_PER_TRADE as DEFAULT_MIN_COMMISSION,
-        INITIAL_CAPITAL as DEFAULT_INITIAL_CAPITAL
+        INITIAL_CAPITAL as DEFAULT_INITIAL_CAPITAL,
+        DEFAULT_SLIPPAGE_PCT
     )
 except ImportError as e:
     print(f"Error importing from main.py: {e}")
@@ -34,6 +35,7 @@ except ImportError as e:
     DEFAULT_COMMISSION_RATE = 0.0005
     DEFAULT_MIN_COMMISSION = 5.0
     DEFAULT_INITIAL_CAPITAL = 100000.0
+    DEFAULT_SLIPPAGE_PCT = 0.001
     def execute_single_backtest_run(*args, **kwargs): 
         return {"error": "execute_single_backtest_run not loaded due to import error from main.py"}
 
@@ -81,6 +83,7 @@ class BacktestRequest(BaseModel):
     # Optional commission override, otherwise use defaults from main.py
     commission_rate_pct: float = DEFAULT_COMMISSION_RATE
     min_commission_per_trade: float = DEFAULT_MIN_COMMISSION
+    slippage_pct: float = None # 新增：可选的滑点百分比
 
 
 @app.get("/api/v1/strategies")
@@ -143,7 +146,8 @@ async def run_backtest_api(request: BacktestRequest):
                 end_date=request.end_date,
                 initial_capital=request.initial_capital,
                 commission_rate_pct=request.commission_rate_pct,
-                min_commission_per_trade=request.min_commission_per_trade
+                min_commission_per_trade=request.min_commission_per_trade,
+                slippage_pct=request.slippage_pct if request.slippage_pct is not None else DEFAULT_SLIPPAGE_PCT
             )
         except Exception as e_exec:
             print(f"Exception during execute_single_backtest_run for {symbol_to_run}: {e_exec}")

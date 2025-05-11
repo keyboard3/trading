@@ -24,6 +24,7 @@ interface RunBacktestButtonProps {
   startDate: string;
   endDate: string;
   parameters: Record<string, any>;
+  slippagePct?: number;
   onBacktestComplete: (response: BacktestResponse | null, error?: string) => void;
 }
 
@@ -33,6 +34,7 @@ const RunBacktestButton: React.FC<RunBacktestButtonProps> = ({
   startDate,
   endDate,
   parameters,
+  slippagePct,
   onBacktestComplete,
 }) => {
   const [isLoading, setIsLoading] = useState(false);
@@ -62,6 +64,7 @@ const RunBacktestButton: React.FC<RunBacktestButtonProps> = ({
       start_date: startDate,
       end_date: endDate,
       parameters: parameters,
+      ...(slippagePct !== undefined && !isNaN(slippagePct) && { slippage_pct: slippagePct })
     };
 
     setIsLoading(true);

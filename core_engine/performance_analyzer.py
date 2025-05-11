@@ -94,20 +94,31 @@ def calculate_performance_metrics(portfolio_history: pd.DataFrame, trades: pd.Da
 def generate_performance_report(metrics: dict, 
                                 trades_df: pd.DataFrame = None, 
                                 title: str = None,
-                                commission_rate_pct: float = None, # 新增手续费率参数
-                                min_commission: float = None):    # 新增最低手续费参数
+                                commission_rate_pct: float = None, 
+                                min_commission: float = None,
+                                slippage_pct: float = None): # 新增滑点参数
     """
     生成文本格式的回测性能报告。
-    新增显示手续费设置的功能。
+    新增显示手续费和滑点设置的功能。
     """
     if title:
         report = f"--- {title} ---\n"
     else:
         report = "--- 回测性能报告 ---\n"
     
-    # 在指标前显示手续费信息 (如果提供了)
+    # 在指标前显示交易条件信息
+    has_trading_conditions = False
+    trading_conditions_report = ""
     if commission_rate_pct is not None and min_commission is not None:
-        report += f"手续费设置: 费率={commission_rate_pct*100:.4f}%, 最低收费={min_commission:.2f}元/笔\n"
+        trading_conditions_report += f"手续费设置: 费率={commission_rate_pct*100:.4f}%, 最低收费={min_commission:.2f}元/笔\n"
+        has_trading_conditions = True
+    
+    if slippage_pct is not None and slippage_pct > 0:
+        trading_conditions_report += f"滑点设置: {slippage_pct*100:.4f}%\n"
+        has_trading_conditions = True
+
+    if has_trading_conditions:
+        report += trading_conditions_report
         report += "---\n" # 分隔线
         
     for key, value in metrics.items():

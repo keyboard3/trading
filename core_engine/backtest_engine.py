@@ -5,12 +5,13 @@ def run_backtest(
     initial_capital: float,
     commission_rate_pct: float = 0.0, # 手续费率 (例如 0.0005 代表 0.05%)
     min_commission: float = 0.0,      # 最低手续费 (例如 5.0)
+    slippage_pct: float = 0.0, # 新增：滑点百分比 (例如 0.0001 代表 0.01%)
     close_col: str = 'close',
     signal_col: str = 'signal',
     symbol_col: str = 'symbol'
 ):
     """
-    执行简单的事件驱动回测，支持多股票代码，并考虑交易手续费。
+    执行简单的事件驱动回测，支持多股票代码，并考虑交易手续费和滑点。
 
     参数:
     data_with_signals (pd.DataFrame): 包含价格数据和交易信号的DataFrame。
@@ -19,6 +20,8 @@ def run_backtest(
     initial_capital (float): 初始资金。
     commission_rate_pct (float): 交易手续费率（百分比的小数表示，例如0.05%应传入0.0005）。
     min_commission (float): 每笔交易的最低手续费。
+    slippage_pct (float): 应用于每笔交易的滑点百分比。
+                          买入时价格增加，卖出时价格减少。
     close_col (str): 收盘价列名。
     signal_col (str): 交易信号列名 (1 for Buy, -1 for Sell, 0 for Hold)。
     symbol_col (str): 股票代码列名。
@@ -54,15 +57,17 @@ def run_backtest(
         for _, row in current_day_data_for_date.iterrows():
             symbol = row[symbol_col]
             signal = row[signal_col]
-            price_at_trade = row[close_col] # 假设在当日收盘价交易
+            price_at_signal = row[close_col] # 信号发出时的价格，作为滑点计算的基础
 
             fixed_trade_quantity = 10 # 简化：固定交易10股
             commission_this_trade = 0.0
+            actual_execution_price = price_at_signal # 初始化实际执行价格
 
             if signal == 1:  # 买入信号
                 # 仅当未持有或持仓为0时买入 (简化)
                 if holdings.get(symbol, 0) == 0:
-                    cost_of_trade_before_commission = fixed_trade_quantity * price_at_trade
+                    actual_execution_price = price_at_signal * (1 + slippage_pct) # 应用买入滑点
+                    cost_of_trade_before_commission = fixed_trade_quantity * actual_execution_price
                     
                     # 计算手续费
                     commission_this_trade = cost_of_trade_before_commission * commission_rate_pct
@@ -76,14 +81,15 @@ def run_backtest(
                         cash -= total_cost_of_trade # 扣除包含手续费的总成本
                         trades_log.append({
                             'timestamp': current_date, 'symbol': symbol, 'action': 'BUY',
-                            'quantity': fixed_trade_quantity, 'price': price_at_trade, 
+                            'quantity': fixed_trade_quantity, 'price': actual_execution_price, # 记录含滑点的价格 
                             'cost': cost_of_trade_before_commission, # 记录未含手续费的成本
                             'commission': commission_this_trade
                         })
             elif signal == -1:  # 卖出信号
                 if holdings.get(symbol, 0) > 0:
                     quantity_held = holdings[symbol]
-                    proceeds_before_commission = quantity_held * price_at_trade
+                    actual_execution_price = price_at_signal * (1 - slippage_pct) # 应用卖出滑点
+                    proceeds_before_commission = quantity_held * actual_execution_price
                     
                     # 计算手续费
                     commission_this_trade = proceeds_before_commission * commission_rate_pct
@@ -96,7 +102,7 @@ def run_backtest(
                     holdings[symbol] = 0  # 简化：卖出该股票全部持仓
                     trades_log.append({
                         'timestamp': current_date, 'symbol': symbol, 'action': 'SELL',
-                        'quantity': quantity_held, 'price': price_at_trade, 
+                        'quantity': quantity_held, 'price': actual_execution_price, # 记录含滑点的价格
                         'cost': -proceeds_before_commission, # 记录未含手续费的成本 (负数代表收入)
                         'commission': commission_this_trade
                     })

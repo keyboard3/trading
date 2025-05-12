@@ -1,0 +1,40 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+### 后端API (`backend/main_api.py`) 与核心引擎组件交互约定
+
+1.  **组件实例化参数一致性**：
+    *   **问题**: 在 `main_api.py` 中实例化核心引擎组件（如 `MockTradingEngine`, `MockRealtimeDataProvider`, 策略类等）时，必须严格按照组件 `__init__` 方法的签名提供所有必需的参数，并确保参数名完全匹配。
+    *   **排查**: 如果出现 `TypeError: __init__() got an unexpected keyword argument '...'` 或 `TypeError: __init__() missing X required positional argument(s): '...'`，请优先检查：
+        1.  调用方 (`main_api.py`) 传递的参数名和数量。
+        2.  被调用组件 (`core_engine/` 或 `strategies/` 下的类) `__init__` 方法的定义。
+    *   **示例错误**:
+        *   `MockRealtimeDataProvider.__init__() got an unexpected keyword argument 'update_interval_seconds'` (应在 `symbols_config` 内部配置 `interval_seconds`)。
+        *   `RealtimeSimpleMAStrategy.__init__() missing 1 required positional argument: 'data_provider'` (如果API负责订阅，则策略不应再期望 `data_provider` 作为构造参数)。
+
+2.  **方法名调用一致性**：
+    *   **问题**: 调用核心引擎组件的方法时，必须使用其类定义中确切的方法名。
+    *   **排查**: 如果出现 `AttributeError: '...' object has no attribute '...'`，请检查：
+        1.  调用方使用的方法名。
+        2.  目标类中实际定义的方法名。
+    *   **示例错误**:
+        *   `'MockRealtimeDataProvider' object has no attribute 'register_subscriber'` (正确方法名为 `subscribe`)。
+
+3.  **数据提供者 (`MockRealtimeDataProvider`) 的 `symbols_config` 结构**：
+    *   `MockRealtimeDataProvider` 的 `__init__` 方法期望 `symbols_config` 参数是一个**列表 (`List`)**，列表中的每个元素是一个字典。
+    *   每个字典代表一个交易品种的配置，并且**必须包含** `'symbol'` 和 `'interval_seconds'` 键。其他键如 `'initial_price'`, `'volatility'` 也是必需的。
+    *   **错误示例**: 将 `symbols_config` 作为单个字典传递，或字典内缺少 `'symbol'` 或 `'interval_seconds'`。
+
+4.  **策略类 (`strategies/`) 与数据提供者的解耦**：
+    *   **当前模式**: 在 `backend/main_api.py` 中，数据提供者 (`MockRealtimeDataProvider`) 实例化后，显式地将策略实例的 `on_new_tick` 方法注册（订阅）到数据提供者。
+    *   **策略类设计**:
+        *   策略类的 `__init__` 方法**不应**再接受 `data_provider` 作为参数。
+        *   策略类**不应**包含 `start()` (用于订阅) 或 `stop()` (用于取消订阅) 方法。这些操作由 `main_api.py` 处理。
+        *   策略类只需提供一个 `on_new_tick(self, data_tick: DataTick)` 方法作为回调。
+    *   **RSI策略参数名注意**: `STRATEGY_REGISTRY` 中RSI策略的周期参数名为 "period"。确保 `RealtimeRSIStrategy` 类初始化时也使用此名称，或者在 `main_api.py` 中获取参数时使用 `"period"` (例如 `request.parameters.get("period", 14)`)。
+
+5.  **FastAPI 请求体模型 (`pydantic.BaseModel`)**：
+    *   定义API端点的请求体模型时（例如 `StartSimulationRequest`），所有字段都应与前端发送的数据结构匹配。
+    *   如果添加新的可选配置项（如 `risk_parameters`），确保在Pydantic模型中正确定义，并在API处理函数中相应地使用这些值。

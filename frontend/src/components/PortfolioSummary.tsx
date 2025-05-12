@@ -1,8 +1,8 @@
 import React from 'react';
-import type { PortfolioStatus } from '../types';
+import type { PortfolioStatusResponse } from '../types';
 
 interface PortfolioSummaryProps {
-  portfolioStatus?: PortfolioStatus;
+  portfolioStatus?: PortfolioStatusResponse;
   isActuallyRunning?: boolean;
   isLoading: boolean;
   error?: string | null;

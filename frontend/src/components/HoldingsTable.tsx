@@ -36,28 +36,41 @@ const HoldingsTable: React.FC<HoldingsTableProps> = ({ holdings, isLoading, erro
               <th scope="col" className="py-3 px-4 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">平均成本</th>
               <th scope="col" className="py-3 px-4 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">当前价格</th>
               <th scope="col" className="py-3 px-4 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">市值</th>
-              <th scope="col" className="py-3 px-4 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">未实现盈亏</th>
+              <th scope="col" className="py-3 px-4 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">未实现盈亏 (值 / %)</th>
             </tr>
           </thead>
           <tbody className="bg-gray-800 divide-y divide-gray-700">
-            {holdings.map((holding) => (
-              <tr key={holding.symbol} className="hover:bg-gray-700">
-                <td className="py-4 px-4 whitespace-nowrap text-sm font-medium text-blue-300">{holding.symbol}</td>
-                <td className="py-4 px-4 whitespace-nowrap text-sm text-right text-gray-300">{holding.quantity.toLocaleString()}</td>
-                <td className="py-4 px-4 whitespace-nowrap text-sm text-right text-gray-300">
-                  ${holding.average_cost_price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </td>
-                <td className="py-4 px-4 whitespace-nowrap text-sm text-right text-gray-300">
-                  {holding.current_price != null ? `$${holding.current_price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}` : 'N/A'}
-                </td>
-                <td className="py-4 px-4 whitespace-nowrap text-sm text-right text-gray-300">
-                  {holding.market_value != null ? `$${holding.market_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'N/A'}
-                </td>
-                <td className={`py-4 px-4 whitespace-nowrap text-sm text-right font-medium ${holding.unrealized_pnl != null && holding.unrealized_pnl > 0 ? 'text-green-400' : holding.unrealized_pnl != null && holding.unrealized_pnl < 0 ? 'text-red-400' : 'text-gray-300'}`}>
-                  {holding.unrealized_pnl != null ? `$${holding.unrealized_pnl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'N/A'}
-                </td>
-              </tr>
-            ))}
+            {holdings.map((holding) => {
+              // Calculate P&L percentage
+              let pnlPercentage: number | null = null;
+              if (holding.current_price != null && holding.average_cost_price > 0) {
+                pnlPercentage = ((holding.current_price - holding.average_cost_price) / holding.average_cost_price) * 100;
+              } else if (holding.current_price != null && holding.average_cost_price === 0 && holding.current_price > 0) {
+                pnlPercentage = Infinity; // Or handle as a special case like 'New' or 'N/A for %'
+              }
+
+              const pnlValueStr = holding.unrealized_pnl != null ? `$${holding.unrealized_pnl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'N/A';
+              const pnlPercentageStr = pnlPercentage === Infinity ? '(+Inf%)' : pnlPercentage != null ? `(${pnlPercentage.toFixed(2)}%)` : '';
+              
+              return (
+                <tr key={holding.symbol} className="hover:bg-gray-700">
+                  <td className="py-4 px-4 whitespace-nowrap text-sm font-medium text-blue-300">{holding.symbol}</td>
+                  <td className="py-4 px-4 whitespace-nowrap text-sm text-right text-gray-300">{holding.quantity.toLocaleString()}</td>
+                  <td className="py-4 px-4 whitespace-nowrap text-sm text-right text-gray-300">
+                    ${holding.average_cost_price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </td>
+                  <td className="py-4 px-4 whitespace-nowrap text-sm text-right text-gray-300">
+                    {holding.current_price != null ? `$${holding.current_price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}` : 'N/A'}
+                  </td>
+                  <td className="py-4 px-4 whitespace-nowrap text-sm text-right text-gray-300">
+                    {holding.market_value != null ? `$${holding.market_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'N/A'}
+                  </td>
+                  <td className={`py-4 px-4 whitespace-nowrap text-sm text-right font-medium ${holding.unrealized_pnl != null && holding.unrealized_pnl > 0 ? 'text-green-400' : holding.unrealized_pnl != null && holding.unrealized_pnl < 0 ? 'text-red-400' : 'text-gray-300'}`}>
+                    {pnlValueStr} {pnlPercentageStr}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

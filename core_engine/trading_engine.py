@@ -7,6 +7,27 @@ from .realtime_feed import DataTick # Correct: DataTick is defined in realtime_f
 from . import risk_manager # Use `from . import risk_manager` for explicit relative import
 from .risk_manager import RiskAlert # Import RiskAlert namedtuple
 
+# Import LogColors
+import sys
+import os
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+try:
+    from backend.logger_utils import LogColors
+except ImportError:
+    print("Critical Error: Could not import LogColors from backend.logger_utils. Colored logs will not be available in TradingEngine.")
+    class LogColors:
+        HEADER = ''
+        OKBLUE = ''
+        OKCYAN = ''
+        OKGREEN = ''
+        WARNING = ''
+        FAIL = ''
+        ENDC = ''
+        BOLD = ''
+        UNDERLINE = ''
+
 # Define the structure for a signal event that the engine expects
 SignalEvent = Dict[str, Any] # e.g., {'type': 'signal', 'symbol': str, 'timestamp': float, 'signal': str ('BUY','SELL','HOLD'), 'price': float}
 
@@ -47,7 +68,7 @@ class MockTradingEngine:
         self.current_price_provider_callback = current_price_provider_callback
 
         if self.verbose:
-            print(f"MockTradingEngine initialized. Fixed trade quantity: {self.fixed_trade_quantity}. Risk Params: {self.risk_parameters}")
+            print(f"{LogColors.OKCYAN}MockTradingEngine initialized. Fixed trade quantity: {self.fixed_trade_quantity}. Risk Params: {self.risk_parameters}{LogColors.ENDC}")
 
     def _generate_trade_id(self) -> str:
         self._trade_id_counter += 1
@@ -56,7 +77,7 @@ class MockTradingEngine:
     def _perform_risk_evaluation(self, trade_context: Optional[Dict[str, Any]] = None):
         """Helper to perform risk evaluation and update active_risk_alerts."""
         if not self.current_price_provider_callback:
-            if self.verbose: print("MockTradingEngine: Risk evaluation skipped - no current price provider callback.")
+            if self.verbose: print(f"{LogColors.WARNING}MockTradingEngine: Risk evaluation skipped - no current price provider callback.{LogColors.ENDC}")
             return
 
         portfolio_state = {
@@ -79,9 +100,10 @@ class MockTradingEngine:
         self.active_risk_alerts.extend(new_alerts)
 
         if self.verbose and self.active_risk_alerts:
-            print(f"MockTradingEngine: Active Risk Alerts after evaluation ({'Pre-trade for ' + trade_context['symbol'] if trade_context else 'Post-update'}):")
+            context_msg = f"Pre-trade for {trade_context['symbol']}" if trade_context else "Post-update"
+            print(f"{LogColors.WARNING}MockTradingEngine: Active Risk Alerts after evaluation ({context_msg}):{LogColors.ENDC}")
             for alert in self.active_risk_alerts:
-                print(f"  - {alert}")
+                print(f"{LogColors.WARNING}  - {alert}{LogColors.ENDC}")
 
     def handle_signal_event(self, event: SignalEvent) -> None:
         """
@@ -91,7 +113,7 @@ class MockTradingEngine:
         'price' is the price at which the signal was generated / trade should be attempted.
         """
         if self.verbose:
-            print(f"MockTradingEngine: Received signal event: {event}")
+            print(f"{LogColors.OKBLUE}MockTradingEngine: Received signal event: {event}{LogColors.ENDC}")
 
         signal_type = event.get('signal', '').upper()
         symbol = event.get('symbol')
@@ -100,7 +122,7 @@ class MockTradingEngine:
 
         if not all([signal_type, symbol, price is not None]): # price can be 0, so check for None
             if self.verbose:
-                print(f"MockTradingEngine: Received incomplete or invalid signal event: {event}. Skipping.")
+                print(f"{LogColors.FAIL}MockTradingEngine: Received incomplete or invalid signal event: {event}. Skipping.{LogColors.ENDC}")
             return
 
         # --- Post-update/General Risk Check (before processing new signal actions) ---
@@ -113,16 +135,16 @@ class MockTradingEngine:
              # This is handled by `_perform_risk_evaluation` using `self.current_price_provider_callback`.
             self._perform_risk_evaluation() 
         else:
-            if self.verbose: print("MockTradingEngine: Skipping initial risk evaluation as no price callback is set.")
+            if self.verbose: print(f"{LogColors.WARNING}MockTradingEngine: Skipping initial risk evaluation as no price callback is set.{LogColors.ENDC}")
 
         if signal_type == 'HOLD':
             if self.verbose:
-                print(f"MockTradingEngine: Received HOLD signal for {symbol} at {price:.2f} (Timestamp: {time.ctime(timestamp)}). No action taken.")
+                print(f"{LogColors.OKBLUE}MockTradingEngine: Received HOLD signal for {symbol} at {price:.2f} (Timestamp: {time.ctime(timestamp)}). No action taken.{LogColors.ENDC}")
             return
         
         if signal_type not in ['BUY', 'SELL']:
             if self.verbose:
-                print(f"MockTradingEngine: Received unknown signal type '{signal_type}' for {symbol}. Skipping event: {event}")
+                print(f"{LogColors.FAIL}MockTradingEngine: Received unknown signal type '{signal_type}' for {symbol}. Skipping event: {event}{LogColors.ENDC}")
             return
 
         quantity_to_trade = self.fixed_trade_quantity
@@ -140,19 +162,20 @@ class MockTradingEngine:
                 'symbol': symbol,
                 'potential_market_value_after_trade': potential_market_value_of_position
             }
+            if self.verbose: print(f"{LogColors.OKCYAN}MockTradingEngine: Performing PRE-TRADE risk check for BUY {symbol}...{LogColors.ENDC}")
             self._perform_risk_evaluation(trade_context=trade_context_for_buy)
             
             # Check if the pre-trade check specifically added a MAX_POSITION_SIZE_PRE_TRADE alert for this symbol
             if any(a.alert_type == 'MAX_POSITION_SIZE_PRE_TRADE' and a.symbol == symbol for a in self.active_risk_alerts):
                 if self.verbose:
-                    print(f"MockTradingEngine: PRE-TRADE RISK. BUY for {symbol} blocked due to Max Position Size alert.")
+                    print(f"{LogColors.FAIL}MockTradingEngine: PRE-TRADE RISK. BUY for {symbol} blocked due to Max Position Size alert.{LogColors.ENDC}")
                 # Potentially log this blocked trade or notify strategy if that mechanism exists
                 return # Do not proceed with the trade
 
         trade_id = self._generate_trade_id()
         
         if self.verbose:
-            print(f"MockTradingEngine: Processing signal. Attempting {signal_type} {quantity_to_trade} of {symbol} at price {price:.2f}, Timestamp: {time.ctime(timestamp)}")
+            print(f"{LogColors.OKCYAN}MockTradingEngine: Processing signal. Attempting {signal_type} {quantity_to_trade} of {symbol} at price {price:.2f}, Timestamp: {time.ctime(timestamp)}{LogColors.ENDC}")
 
         # Attempt to record the transaction with the portfolio
         transaction_successful = self.portfolio.record_transaction(
@@ -176,19 +199,20 @@ class MockTradingEngine:
             }
             self.trade_log.append(trade_record)
             if self.verbose:
-                print(f"MockTradingEngine: {signal_type} successful for {symbol}. Trade ID: {trade_id}. Recorded: {trade_record}. Portfolio updated.")
+                print(f"{LogColors.OKGREEN}MockTradingEngine: {signal_type} successful for {symbol}. Trade ID: {trade_id}. Recorded: {trade_record}. Portfolio updated.{LogColors.ENDC}")
             
             # --- Post-Transaction Risk Re-evaluation ---
             # After a successful trade, re-evaluate all risks with the new portfolio state.
             # This will catch stop-loss on newly acquired positions if price was bad,
             # or confirm max position size with actual portfolio data, and check drawdown.
             if self.current_price_provider_callback:
+                if self.verbose: print(f"{LogColors.OKCYAN}MockTradingEngine: Performing POST-TRADE risk evaluation...{LogColors.ENDC}")
                 self._perform_risk_evaluation()
             else:
-                 if self.verbose: print("MockTradingEngine: Skipping post-transaction risk evaluation - no price callback.")
+                 if self.verbose: print(f"{LogColors.WARNING}MockTradingEngine: Skipping post-transaction risk evaluation - no price callback.{LogColors.ENDC}")
 
         elif self.verbose:
-            print(f"MockTradingEngine: {signal_type} FAILED for {symbol} (e.g., insufficient funds/shares). Event: {event}. See portfolio logs.")
+            print(f"{LogColors.FAIL}MockTradingEngine: {signal_type} FAILED for {symbol} (e.g., insufficient funds/shares). Event: {event}. See portfolio logs.{LogColors.ENDC}")
             
     def get_trade_log(self) -> List[TradeRecord]:
         return self.trade_log
@@ -198,101 +222,128 @@ class MockTradingEngine:
 
 
 if __name__ == '__main__':
-    print("\n--- MockTradingEngine Test ---")
+    print(f"{LogColors.HEADER}\n--- MockTradingEngine Test ---{LogColors.ENDC}")
     
-    # 1. Setup a MockPortfolio
-    initial_cash = 20000.00
-    portfolio = MockPortfolio(initial_cash=initial_cash)
+    initial_cash = 30000.00 # Increased initial cash to allow more trades for testing risk
+    portfolio = MockPortfolio(initial_cash=initial_cash, verbose=True)
     
-    # 2. Setup MockTradingEngine
-    # For this standalone test, data_provider is not critical as price comes with signal
-    engine = MockTradingEngine(portfolio=portfolio, fixed_trade_quantity=50, verbose=True)
-    
-    print(f"\nInitial Portfolio Cash: {portfolio.get_cash():.2f}")
-    print(f"Initial Portfolio Holdings: {portfolio.get_holdings()}")
+    # Mock current price provider for risk evaluation tests
+    mock_market_prices = {
+        'AAPL': 150.0, 
+        'MSFT': 280.0, 
+        'GOOG': 2000.0,
+        'TSLA': 100.0 # Added for another position
+    }
+    def mock_price_provider(symbol: str) -> Optional[float]:
+        price = mock_market_prices.get(symbol)
+        # Ensure portfolio's verbose flag is accessible or pass engine's verbose
+        # For simplicity here, let's assume we want these logs if engine is verbose.
+        # if portfolio.verbose: 
+        print(f"{LogColors.OKBLUE}MockPriceProvider: Request for {symbol}, returning {price}{LogColors.ENDC}")
+        return price
 
-    # 3. Simulate some signal events
+    # Risk parameters for testing - make them somewhat restrictive to trigger easily
+    test_risk_params = {
+        'stop_loss_pct': 0.05,      # 5% stop loss from avg cost
+        'max_pos_pct': 0.40,        # Max 40% of portfolio in one asset 
+        'max_dd_pct': 0.10           # Max 10% drawdown from peak portfolio value
+    }
+
+    engine = MockTradingEngine(
+        portfolio=portfolio, 
+        fixed_trade_quantity=50, # Default trade quantity
+        risk_parameters=test_risk_params, 
+        current_price_provider_callback=mock_price_provider, # PROVIDE THE CALLBACK
+        verbose=True
+    )
+    
+    print(f"{LogColors.OKCYAN}\nInitial Portfolio Cash: {portfolio.get_cash():.2f}{LogColors.ENDC}")
+    print(f"{LogColors.OKCYAN}Initial Portfolio Holdings: {portfolio.get_holdings()}{LogColors.ENDC}")
+    portfolio.peak_portfolio_value = initial_cash # Explicitly set initial peak
+
     ts = time.time()
 
-    # Signal 1: BUY AAPL
-    buy_signal_aapl: SignalEvent = {
-        'symbol': 'AAPL',
-        'timestamp': ts,
-        'signal': 'BUY',
-        'price': 150.00
-    }
-    engine.handle_signal_event(buy_signal_aapl)
-    ts += 1 # Increment timestamp for next event
+    # --- Test Sequence --- 
 
-    # Signal 2: BUY MSFT (should succeed if enough cash)
-    buy_signal_msft: SignalEvent = {
-        'symbol': 'MSFT',
-        'timestamp': ts,
-        'signal': 'BUY',
-        'price': 280.00 
-    }
+    print(f"{LogColors.HEADER}\nSignal 1: BUY AAPL (50 * $150 = $7500). Cash: 22500. Total: 30000. Peak: 30000{LogColors.ENDC}")
+    # AAPL is 7500 / 30000 = 25% (OK, limit 40%)
+    buy_signal_aapl: SignalEvent = { 'symbol': 'AAPL', 'timestamp': ts, 'signal': 'BUY', 'price': 150.00 }
+    engine.handle_signal_event(buy_signal_aapl)
+    ts += 1
+
+    print(f"{LogColors.HEADER}\nSignal 2: BUY TSLA (50 * $100 = $5000). Cash: 17500. Holdings: AAPL 7500, TSLA 5000. Total: 30000. Peak: 30000{LogColors.ENDC}")
+    # TSLA is 5000 / 30000 = 16.67% (OK)
+    # AAPL is 7500 / 30000 = 25% (OK)
+    buy_signal_tsla: SignalEvent = { 'symbol': 'TSLA', 'timestamp': ts, 'signal': 'BUY', 'price': 100.00 }
+    engine.handle_signal_event(buy_signal_tsla)
+    ts += 1
+
+    print(f"{LogColors.HEADER}\nSignal 3: AAPL price drops to $140 (Stop-Loss Test). Loss: (150-140)/150 = 6.67% > 5%{LogColors.ENDC}")
+    mock_market_prices['AAPL'] = 140.0
+    # Holdings: AAPL 50*140=7000, TSLA 50*100=5000. Cash 17500. Total: 7000+5000+17500 = 29500.
+    # Peak 30000. Drawdown (30000-29500)/30000 = 500/30000 = 1.67% (OK, limit 10%)
+    hold_signal_aapl_sl: SignalEvent = { 'symbol': 'AAPL', 'timestamp': ts, 'signal': 'HOLD', 'price': 140.0 } # Price in HOLD is for context
+    engine.handle_signal_event(hold_signal_aapl_sl)
+    ts += 1
+    assert any(a.alert_type == 'STOP_LOSS_PER_POSITION' and a.symbol == 'AAPL' for a in engine.get_active_risk_alerts()), "Stop loss for AAPL should be triggered"
+    print(f"{LogColors.OKGREEN}Stop-loss for AAPL successfully triggered.{LogColors.ENDC}")
+
+    print(f"{LogColors.HEADER}\nSignal 4: Attempt to BUY MSFT (50 * $280 = $14000). Cash needed. Available: 17500. Will pass cash check.{LogColors.ENDC}")
+    print(f"{LogColors.HEADER}PRE-TRADE CHECK: MSFT would be $14000. Portfolio total $29500 (before this trade). $14000/$29500 = 47.4% > 40% limit.{LogColors.ENDC}")
+    # This BUY should be BLOCKED by pre-trade max position size check.
+    buy_signal_msft: SignalEvent = { 'symbol': 'MSFT', 'timestamp': ts, 'signal': 'BUY', 'price': 280.00 }
+    trades_before_msft_buy = len(engine.get_trade_log())
     engine.handle_signal_event(buy_signal_msft)
     ts += 1
+    assert any(a.alert_type == 'MAX_POSITION_SIZE_PRE_TRADE' and a.symbol == 'MSFT' for a in engine.get_active_risk_alerts()), "Max Position Size (PRE-TRADE) for MSFT should be triggered"
+    assert len(engine.get_trade_log()) == trades_before_msft_buy, "MSFT trade should have been BLOCKED"
+    print(f"{LogColors.OKGREEN}Max Position Size (PRE-TRADE) for MSFT successfully triggered and trade BLOCKED.{LogColors.ENDC}")
 
-    # Signal 3: HOLD AAPL (should do nothing but log if verbose)
-    hold_signal_aapl: SignalEvent = {
-        'symbol': 'AAPL',
-        'timestamp': ts,
-        'signal': 'HOLD',
-        'price': 152.00 
-    }
-    engine.handle_signal_event(hold_signal_aapl)
+    print(f"{LogColors.HEADER}\nSignal 5: TSLA price drops to $80 (Drawdown Test). AAPL still at $140.{LogColors.ENDC}")
+    mock_market_prices['TSLA'] = 80.0
+    # Holdings: AAPL 50*140=7000, TSLA 50*80=4000. Cash 17500. Total: 7000+4000+17500 = 28500.
+    # Peak 30000. Drawdown (30000-28500)/30000 = 1500/30000 = 5% (OK, limit 10%)
+    # Let's make it trigger: Need total value to be < 27000 (10% of 30k peak is 3k drop)
+    # Current total is 28500. Need another 1501 drop. Let AAPL also drop more.
+    mock_market_prices['AAPL'] = 110.0 # AAPL: 50*110=5500. TSLA: 50*80=4000. Cash 17500. Total: 5500+4000+17500 = 27000.
+    # Drawdown (30000-27000)/30000 = 3000/30000 = 10%. This should trigger.
+    # Actually, if it's *exactly* 10%, the check is `drawdown > limit`, so it won't trigger. Let's make it slightly more.
+    mock_market_prices['AAPL'] = 109.0 # AAPL: 50*109=5450. TSLA: 50*80=4000. Cash 17500. Total: 5450+4000+17500 = 26950.
+    # Drawdown (30000-26950)/30000 = 3050/30000 = 10.16% > 10%. This WILL trigger.
+    hold_signal_dd: SignalEvent = { 'symbol': 'TSLA', 'timestamp': ts, 'signal': 'HOLD', 'price': 80.0 }
+    engine.handle_signal_event(hold_signal_dd)
     ts += 1
+    assert any(a.alert_type == 'MAX_ACCOUNT_DRAWDOWN' for a in engine.get_active_risk_alerts()), "Max Account Drawdown should be triggered"
+    # Also, AAPL stop loss might trigger again if its avg cost is still 150 and price is 109: (150-109)/150 = 41/150 = 27% loss.
+    assert any(a.alert_type == 'STOP_LOSS_PER_POSITION' and a.symbol == 'AAPL' for a in engine.get_active_risk_alerts()), "Stop loss for AAPL should be re-triggered or still active"
+    print(f"{LogColors.OKGREEN}Max Account Drawdown (and AAPL SL) successfully triggered.{LogColors.ENDC}")
 
-    # Signal 4: SELL AAPL (should succeed)
-    sell_signal_aapl: SignalEvent = {
-        'symbol': 'AAPL',
-        'timestamp': ts,
-        'signal': 'SELL',
-        'price': 155.00 
-    }
+    print(f"{LogColors.HEADER}\nSignal 6: Sell all AAPL (50 * $109 = $5995).{LogColors.ENDC}")
+    # Before: Cash 17500. Holdings: AAPL 5450, TSLA 4000. Total 26950.
+    # After: Cash 17500+5995=23495. Holdings: TSLA 4000. Total 27495.
+    # Peak 30000. Drawdown (30000-27495)/30000 = 2505/30000 = 8.35% (OK)
+    sell_signal_aapl: SignalEvent = { 'symbol': 'AAPL', 'timestamp': ts, 'signal': 'SELL', 'price': 109.00 }
     engine.handle_signal_event(sell_signal_aapl)
     ts += 1
 
-    # Signal 5: Attempt to BUY GOOG (might fail if fixed_trade_quantity * price > remaining cash)
-    buy_signal_goog: SignalEvent = {
-        'symbol': 'GOOG',
-        'timestamp': ts,
-        'signal': 'BUY',
-        'price': 2200.00 
-    }
-    engine.handle_signal_event(buy_signal_goog)
-    ts += 1
-    
-    # Signal 6: Attempt to SELL MSFT more than fixed quantity (should fail if initial buy was only fixed_trade_quantity)
-    # For this, we need to know if the first MSFT buy was 50. If so, selling 50 is fine.
-    # If fixed_trade_quantity was, say, 10 for MSFT, and we try to sell 50, it would use portfolio logic.
-    # The engine itself doesn't track quantity beyond fixed_trade_quantity per transaction.
-    # The portfolio.record_transaction handles if enough shares are present.
-    sell_signal_msft_again: SignalEvent = {
-        'symbol': 'MSFT', 
-        'timestamp': ts, 
-        'signal': 'SELL', 
-        'price': 285.00
-    }
-    engine.handle_signal_event(sell_signal_msft_again)
+    print(f"{LogColors.HEADER}\nSignal 7: Sell all TSLA (50 * $80 = $4000).{LogColors.ENDC}")
+    # Before: Cash 23495. Holdings: TSLA 4000. Total 27495.
+    # After: Cash 23495+4000=27495. Holdings: {}. Total 27495.
+    # Peak 30000. Drawdown 8.35% (OK)
+    sell_signal_tsla: SignalEvent = { 'symbol': 'TSLA', 'timestamp': ts, 'signal': 'SELL', 'price': 80.00 }
+    engine.handle_signal_event(sell_signal_tsla)
     ts += 1
 
-    print("\n--- Final State ---")
-    print(f"Final Portfolio Cash: {portfolio.get_cash():.2f}")
-    print(f"Final Portfolio Holdings: {portfolio.get_holdings()}")
-    print("\nTrade Log:")
-    for trade in engine.get_trade_log():
-        print(trade)
-        
-    # Example of calculating final portfolio value if we had a way to get current prices
-    # For the test, we can just use the last signal prices or make them up
-    current_prices_for_calc = {
-        'AAPL': sell_signal_aapl['price'], # Last traded price for AAPL
-        'MSFT': sell_signal_msft_again['price'] if portfolio.get_position('MSFT') else 0, # Last traded for MSFT if still held
-        'GOOG': buy_signal_goog['price'] if portfolio.get_position('GOOG') else 0
-    }
-    final_total_value = portfolio.get_total_portfolio_value(current_prices=current_prices_for_calc)
-    print(f"\nEstimated Final Portfolio Value (using last known/trade prices): {final_total_value:.2f}")
+    print(f"{LogColors.HEADER}\n--- Final State ---{LogColors.ENDC}")
+    print(f"{LogColors.OKCYAN}Final Portfolio Cash: {portfolio.get_cash():.2f}{LogColors.ENDC}")
+    print(f"{LogColors.OKCYAN}Final Portfolio Holdings: {portfolio.get_holdings()}{LogColors.ENDC}")
+    print(f"{LogColors.OKCYAN}Final Trade Log: {engine.get_trade_log()}{LogColors.ENDC}")
+    # After selling all, risk alerts might clear if they were position specific and positions are gone,
+    # or Max DD might persist if value hasn't recovered above threshold.
+    # Let's perform one last risk eval manually by sending a HOLD for a non-existent symbol or similar
+    print(f"{LogColors.OKCYAN}Performing final risk evaluation...{LogColors.ENDC}")
+    final_eval_event: SignalEvent = {'symbol': 'DUMMY', 'timestamp':ts, 'signal':'HOLD', 'price':0}
+    engine.handle_signal_event(final_eval_event)
+    print(f"{LogColors.WARNING}Final Active Risk Alerts: {engine.get_active_risk_alerts()}{LogColors.ENDC}")
 
-    print("\n--- MockTradingEngine Test Finished ---") 
+    print(f"{LogColors.HEADER}\n--- MockTradingEngine Test Finished ---{LogColors.ENDC}") 

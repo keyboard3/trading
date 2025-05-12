@@ -109,7 +109,6 @@ class RealtimeSimpleMAStrategy:
                  symbol: str, 
                  short_window: int, 
                  long_window: int, 
-                 data_provider: RealtimeDataProviderBase,
                  verbose: bool = False,
                  signal_callback: Optional[Callable[[SignalEventForCallback], None]] = None):
         if not isinstance(short_window, int) or not isinstance(long_window, int) or short_window <= 0 or long_window <= 0:
@@ -120,7 +119,6 @@ class RealtimeSimpleMAStrategy:
         self.symbol: str = symbol
         self.short_window: int = short_window
         self.long_window: int = long_window
-        self.data_provider: RealtimeDataProviderBase = data_provider
         self.verbose: bool = verbose
         self.signal_callback: Optional[Callable[[SignalEventForCallback], None]] = signal_callback
 
@@ -249,19 +247,6 @@ class RealtimeSimpleMAStrategy:
     def get_latest_signal(self) -> str:
         """Returns the latest generated signal."""
         return self.current_signal
-
-    def start(self) -> None:
-        """Subscribes the strategy to the data provider for its symbol."""
-        if self.verbose:
-            print(f"RealtimeSimpleMAStrategy for {self.symbol}: Subscribing to data provider.")
-        # Ensure the callback is properly bound if passing instance methods
-        self.data_provider.subscribe(self.symbol, self.on_new_tick)
-
-    def stop(self) -> None:
-        """Unsubscribes the strategy from the data provider."""
-        if self.verbose:
-            print(f"RealtimeSimpleMAStrategy for {self.symbol}: Unsubscribing from data provider.")
-        self.data_provider.unsubscribe(self.symbol, self.on_new_tick)
 
 if __name__ == '__main__':
     # 简单的测试代码

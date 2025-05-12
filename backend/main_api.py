@@ -166,6 +166,7 @@ class StartSimulationRequest(BaseModel):
     strategy_id: str
     parameters: Dict[str, Any]
     initial_capital: Optional[float] = Field(None, gt=0, description="Optional initial capital for the simulation (must be > 0 if provided)")
+    risk_parameters: Optional[Dict[str, float]] = Field(None, description="Optional risk parameters for the simulation. Keys: 'stop_loss_pct', 'max_pos_pct', 'max_dd_pct'")
 
 
 # --- Strategy Registry ---
@@ -566,135 +567,155 @@ async def start_simulation(request: StartSimulationRequest):
     # global simulation_portfolio, simulation_engine, simulation_data_provider, simulation_strategy, simulation_strategy_info, simulation_running # Old globals
     global simulation_components
 
-    print(f"API: Received start_simulation request for strategy_id: {request.strategy_id} with params: {request.parameters}, initial_capital: {request.initial_capital}")
-
     if simulation_components["running"]:
-        print("API: Simulation already running. Stopping current one before starting new.")
-        stop_current_simulation(clear_all_components=True) # Fully clear before starting new
+        raise HTTPException(status_code=400, detail="A simulation is already running. Please stop it before starting a new one.")
 
     if request.strategy_id not in STRATEGY_REGISTRY:
         raise HTTPException(status_code=404, detail=f"Strategy with id '{request.strategy_id}' not found.")
 
     selected_strategy_meta = STRATEGY_REGISTRY[request.strategy_id]
-
+    
     # Validate parameters
-    required_params = {p.name for p in selected_strategy_meta.parameters if p.required}
-    provided_params = set(request.parameters.keys())
-    if not required_params.issubset(provided_params):
-        missing_params = required_params - provided_params
-        raise HTTPException(status_code=400, detail=f"Missing required parameters: {missing_params}")
-
-    # Extract the target symbol for the data provider
-    target_symbol = request.parameters.get("symbol")
-    if not target_symbol or not isinstance(target_symbol, str):
-        # This check is important because MockRealtimeDataProvider needs a symbol to mock.
-        # And strategies generally operate on a specific symbol.
-        raise HTTPException(status_code=400, detail="Strategy parameters must include a valid 'symbol' (string).")
+    for param_spec in selected_strategy_meta.parameters:
+        if param_spec.required and param_spec.name not in request.parameters:
+            raise HTTPException(status_code=400, detail=f"Missing required parameter '{param_spec.name}' for strategy '{selected_strategy_meta.name}'.")
+        # Basic type checking (can be expanded)
+        if param_spec.name in request.parameters:
+            value = request.parameters[param_spec.name]
+            expected_type_str = param_spec.type
+            actual_type = type(value).__name__
+            
+            type_match = False
+            if expected_type_str == "int" and isinstance(value, int): type_match = True
+            elif expected_type_str == "float" and isinstance(value, (int, float)): type_match = True # Allow int for float params
+            elif expected_type_str == "str" and isinstance(value, str): type_match = True
+            elif expected_type_str == "bool" and isinstance(value, bool): type_match = True
+            
+            if not type_match:
+                 raise HTTPException(status_code=400, detail=f"Invalid type for parameter '{param_spec.name}'. Expected {expected_type_str}, got {actual_type}.")
 
     # Determine initial capital
-    initial_capital_to_use = request.initial_capital if request.initial_capital is not None else DEFAULT_INITIAL_CAPITAL
-    print(f"API: Using initial capital: {initial_capital_to_use}")
+    effective_initial_capital = request.initial_capital if request.initial_capital is not None else DEFAULT_INITIAL_CAPITAL
+
+    # --- Prepare Risk Parameters ---
+    effective_risk_params: Dict[str, float] = {
+        'stop_loss_pct': RISK_MAX_UNREALIZED_LOSS_PER_POSITION_PERCENTAGE,
+        'max_pos_pct': RISK_MAX_POSITION_SIZE_PERCENTAGE_OF_PORTFOLIO,
+        'max_dd_pct': RISK_MAX_ACCOUNT_DRAWDOWN_PERCENTAGE
+    }
+    if request.risk_parameters:
+        # Validate provided risk parameter keys if necessary
+        for key in request.risk_parameters.keys():
+            if key not in effective_risk_params:
+                # Or just ignore unknown keys, or log a warning
+                raise HTTPException(status_code=400, detail=f"Unknown risk parameter key: {key}. Allowed keys are 'stop_loss_pct', 'max_pos_pct', 'max_dd_pct'.")
+        effective_risk_params.update(request.risk_parameters)
 
 
+    # Clean up previous simulation state if any (though "running" check should prevent overlap)
+    stop_current_simulation(clear_all_components=True) # Ensure a clean slate
+
+    # Initialize components
     try:
-        # 1. Initialize Portfolio
-        simulation_components["portfolio"] = MockPortfolio(
-            initial_cash=initial_capital_to_use,
-            verbose=True
-        )
-        print(f"API: MockPortfolio initialized with cash: {initial_capital_to_use}")
+        if MockPortfolio is None or MockTradingEngine is None or MockRealtimeDataProvider is None:
+            raise ImportError("Core simulation components (Portfolio, Engine, DataProvider) are not loaded.")
 
-        # 2. Initialize DataProvider
-        # Construct the symbols_config for MockRealtimeDataProvider
-        # It expects a list of symbol configuration dictionaries.
-        mock_symbol_config = [{
-            'symbol': target_symbol,
-            'initial_price': 100.0,  # Default initial price
-            'volatility': 0.002,     # Default volatility for mock data
-            'interval_seconds': 1.0  # Default interval for mock data ticks
-        }]
+        simulation_components["portfolio"] = MockPortfolio(initial_cash=effective_initial_capital, verbose=True)
         
-        print(f"API: Initializing MockRealtimeDataProvider with config: {mock_symbol_config}")
-        simulation_components["data_provider"] = MockRealtimeDataProvider(
-            symbols_config=mock_symbol_config, # Corrected parameter name
-            verbose=True
-        )
-        print(f"API: MockRealtimeDataProvider initialized for symbol: {target_symbol}")
-
-
-        # Callback for trading engine to get current price from data provider
+        # Get the current price callback for the engine
         def get_price_for_engine(symbol: str) -> Optional[float]:
             if simulation_components["data_provider"]:
                 return simulation_components["data_provider"].get_current_price(symbol)
             return None
 
-        # 3. Initialize Trading Engine
-        engine = MockTradingEngine(
-            portfolio=simulation_components["portfolio"], 
-            fixed_trade_quantity=10, # Example, could be a strategy param or global config
-            risk_parameters={
-                'stop_loss_pct': RISK_MAX_UNREALIZED_LOSS_PER_POSITION_PERCENTAGE,
-                'max_pos_pct': RISK_MAX_POSITION_SIZE_PERCENTAGE_OF_PORTFOLIO,
-                'max_dd_pct': RISK_MAX_ACCOUNT_DRAWDOWN_PERCENTAGE
-            }, # Pass risk params
-            current_price_provider_callback=get_price_for_engine, # Pass price callback
+        simulation_components["engine"] = MockTradingEngine(
+            portfolio=simulation_components["portfolio"],
+            risk_parameters=effective_risk_params, # Pass the effective risk parameters
+            current_price_provider_callback=get_price_for_engine,
             verbose=True
         )
-        simulation_components["engine"] = engine
-        if True: print(f"API: MockTradingEngine initialized.")
 
-        # 4. Initialize Strategy
-        # Ensure all required params for strategy constructor are present
-        # Add verbose to strategy constructor call to enable its internal logging
-        strategy_constructor_params = request.parameters.copy()
-        strategy_constructor_params['data_provider'] = simulation_components["data_provider"]
-        strategy_constructor_params['signal_callback'] = engine.handle_signal_event
-        strategy_constructor_params['verbose'] = True # Enable strategy internal logging
-        
-        # Ensure the strategy class is callable
-        # Dynamic strategy instantiation based on strategy_id
-        strategy_instance = None
-        if request.strategy_id == "realtime_simple_ma":
-            if not RealtimeSimpleMAStrategy:
-                 print("BACKEND_API: CRITICAL - RealtimeSimpleMAStrategy class is not available.")
-                 raise HTTPException(status_code=500, detail="MA Strategy class not loaded.")
-            strategy_instance = RealtimeSimpleMAStrategy(**strategy_constructor_params)
-            print(f"BACKEND_API: {selected_strategy_meta.name} (MA) initialized with params: {strategy_constructor_params}. Symbol: {target_symbol}")
-        elif request.strategy_id == "realtime_rsi":
-            if not RealtimeRSIStrategy:
-                 print("BACKEND_API: CRITICAL - RealtimeRSIStrategy class is not available.")
-                 raise HTTPException(status_code=500, detail="RSI Strategy class not loaded.")
-            # RSI strategy might have different specific parameters than MA
-            # We assume strategy_constructor_params contains the correct ones based on STRATEGY_REGISTRY validation by Pydantic
-            strategy_instance = RealtimeRSIStrategy(**strategy_constructor_params)
-            print(f"BACKEND_API: {selected_strategy_meta.name} (RSI) initialized with params: {strategy_constructor_params}. Symbol: {target_symbol}")
+        # Instantiate the selected strategy
+        strategy_symbol_param = request.parameters.get("symbol", "DEFAULT_SYM") # Default if not specified, though MA requires it
+        symbols_config_for_provider: List[Dict[str, Any]] # Define type for clarity
+
+        if selected_strategy_meta.id == "realtime_simple_ma":
+            if RealtimeSimpleMAStrategy is None: raise ImportError("RealtimeSimpleMAStrategy not loaded.")
+            simulation_components["strategy"] = RealtimeSimpleMAStrategy(
+                symbol=strategy_symbol_param, 
+                short_window=request.parameters.get("short_window", 5),
+                long_window=request.parameters.get("long_window", 10),
+                signal_callback=simulation_components["engine"].handle_signal_event,
+                verbose=True
+            )
+            symbols_config_for_provider = [{
+                "symbol": strategy_symbol_param,
+                "initial_price": 100.0,
+                "volatility": 0.01,
+                "trend": 0.0001, # Trend is used by API but not directly by MockRealtimeDataProvider
+                "interval_seconds": 1.0 
+            }]
+
+        elif selected_strategy_meta.id == "realtime_rsi":
+            if RealtimeRSIStrategy is None: raise ImportError("RealtimeRSIStrategy not loaded.")
+            simulation_components["strategy"] = RealtimeRSIStrategy(
+                symbol=strategy_symbol_param,
+                rsi_period=request.parameters.get("rsi_period", 14), # Corrected param name from 'period' to 'rsi_period' if RSI strategy expects that
+                overbought_threshold=request.parameters.get("overbought_threshold", 70),
+                oversold_threshold=request.parameters.get("oversold_threshold", 30),
+                signal_callback=simulation_components["engine"].handle_signal_event,
+                verbose=True
+            )
+            symbols_config_for_provider = [{
+                "symbol": strategy_symbol_param,
+                "initial_price": 100.0,
+                "volatility": 0.02,
+                "trend": -0.00005, # Trend is used by API but not directly by MockRealtimeDataProvider
+                "interval_seconds": 1.0
+            }]
         else:
-            print(f"BACKEND_API: Unknown strategy_id '{request.strategy_id}' for instantiation.")
-            raise HTTPException(status_code=500, detail=f"Strategy class for id '{request.strategy_id}' not found or supported for instantiation.")
+            # This case should ideally be caught by `request.strategy_id not in STRATEGY_REGISTRY`
+            # but as a safeguard if registry and implementation diverge:
+            raise HTTPException(status_code=500, detail=f"Strategy '{selected_strategy_meta.id}' is registered but not implemented in start_simulation.")
 
-        # Store components and info
-        simulation_components["portfolio"] = simulation_components["portfolio"]
-        simulation_components["engine"] = engine
-        simulation_components["data_provider"] = simulation_components["data_provider"]
-        simulation_components["strategy"] = strategy_instance # Use the dynamically created instance
-        simulation_components["strategy_info"] = ApiStrategyInfo(name=selected_strategy_meta.name, parameters=request.parameters)
+        if simulation_components["strategy"] is None: # Should not happen if above logic is correct
+             raise HTTPException(status_code=500, detail="Strategy component could not be initialized.")
+
+
+        simulation_components["data_provider"] = MockRealtimeDataProvider(
+            symbols_config=symbols_config_for_provider, # Now correctly a List[SymbolConfig]
+            verbose=True
+        )
+        # Subscribe the strategy's on_new_tick method to the data provider
+        simulation_components["data_provider"].subscribe(
+            symbol=strategy_symbol_param, # Pass the symbol the strategy is configured for
+            callback_function=simulation_components["strategy"].on_new_tick
+        )
         
-        # 5. Start components
+        # Store strategy info for status API
+        simulation_components["strategy_info"] = ApiStrategyInfo(
+            name=selected_strategy_meta.name,
+            parameters=request.parameters
+        )
+
+        # Start the data provider (which runs in its own thread)
         simulation_components["data_provider"].start()
-        strategy_instance.start() # Strategy subscribes to provider
         simulation_components["running"] = True
         
-        print(f"BACKEND_API: Simulation started successfully for strategy '{selected_strategy_meta.name}' on symbol '{target_symbol}'. Data provider and strategy are active.")
-        return {"message": f"Simulation started for strategy '{selected_strategy_meta.name}' with symbol '{target_symbol}'."}
+        return {"message": f"Simulation started for strategy '{selected_strategy_meta.name}' with initial capital {effective_initial_capital:.2f} and risk params: {effective_risk_params}"}
 
-    except ValueError as ve:
-        print(f"BACKEND_API: ValueError during simulation setup: {ve}")
-        stop_current_simulation() # Clean up partially initialized components
-        raise HTTPException(status_code=400, detail=f"Error initializing simulation: {ve}")
+    except ImportError as e:
+        # Log this error server-side as it's a configuration/system issue
+        print(f"SERVER ERROR during simulation start: Import error - {e}")
+        # Clean up partially initialized components
+        stop_current_simulation(clear_all_components=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: Could not load necessary simulation components. Details: {e}")
     except Exception as e:
-        print(f"BACKEND_API: Unexpected error during simulation start: {e}")
-        stop_current_simulation() # Clean up
-        raise HTTPException(status_code=500, detail=f"Failed to start simulation: {e}")
+        # Log this error server-side
+        print(f"SERVER ERROR during simulation start: {e}")
+        # Clean up partially initialized components
+        stop_current_simulation(clear_all_components=True)
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 
 @app.post("/api/simulation/stop", status_code=200)

@@ -29,24 +29,25 @@ alwaysApply: false
         *   `RealtimeSimpleMAStrategy` (`strategies/simple_ma_strategy.py` - 用于实时模拟)
         *   `RealtimeRSIStrategy` (`strategies/realtime_rsi_strategy.py` - 用于实时模拟，基于RSI指标)
     *   **投资组合管理**: 跟踪头寸、现金和业绩。
-        *   `MockPortfolio` (`core_engine/portfolio.py`)
+        *   `MockPortfolio` (`core_engine/portfolio.py`): 现在还包括已实现/未实现盈亏的详细计算与跟踪，以及基于当前市值的资产分配百分比计算功能。
     *   **交易引擎**: 模拟订单执行。
-        *   `MockTradingEngine` (`core_engine/trading_engine.py`)
+        *   `MockTradingEngine` (`core_engine/trading_engine.py`): 已集成基础的风险管理检查。在处理交易信号前，会进行预交易风险评估（如最大仓位限制）；交易执行后，会进行常规风险监控（如单笔止损、账户最大回撤）。如果预交易检查失败，交易将被阻止。引擎现在可以存储并报告活动中的风险告警。
+    *   **风险管理器 (`RiskManager`)** (`core_engine/risk_manager.py`): 提供一套独立的风险评估函数。包括检查单笔头寸的止损、单个资产的最大持仓规模（占总投资组合的百分比）以及整个账户的最大回撤（相对于历史峰值净值）。定义了 `RiskAlert` 结构来表示风险事件。
     *   **事件/信号系统**: (目前为隐式，如果需要则正式化) 如 `SignalEvent`, `DataTick` 等结构。
 
 2.  **后端 API (`backend/`)**: 一个 FastAPI 应用程序，用于暴露核心引擎的功能并为前端提供数据。
     *   **主应用程序**: `backend/main_api.py`
     *   **API 端点**:\n        *   `/api/v1/strategies`: 获取可用回测策略列表。\n        *   `/api/v1/backtest/run`: 运行历史回测。
-        *   `/api/simulation/status`: (GET) 获取当前实时模拟的详细状态，包括投资组合、最近交易、活动策略信息以及模拟是否正在运行。即使模拟已停止，只要状态未被清除，仍会返回最后的有效状态。
+        *   `/api/simulation/status`: (GET) 获取当前实时模拟的详细状态，包括投资组合（含详细盈亏、资产分配）、最近交易、活动策略信息、模拟是否正在运行以及一个当前活动风险告警的列表 (`risk_alerts`)。即使模拟已停止，只要状态未被清除，仍会返回最后的有效状态。
         *   `/api/simulation/available_strategies`: (GET) 提供一个当前后端注册的、可用于实时模拟的策略列表（含策略ID、名称、描述、参数规格）。供前端动态构建策略选择和参数配置界面。
         *   `/api/simulation/start`: (POST) 根据请求中指定的 `strategy_id`、`parameters` 和可选的 `initial_capital`，初始化并启动一个新的实时模拟会话。启动前会先调用内部逻辑彻底停止并清除任何先前的模拟状态，以确保全新的开始。
         *   `/api/simulation/stop`: (POST) 停止当前正在运行的实时模拟的核心活动部分（如数据提供者和策略的数据处理循环）。默认情况下，此操作会保留投资组合、交易引擎和策略信息的最终状态，以便用户查看。应用关闭时，会进行彻底的状态清除。
-    *   **数据模型**: 用于 API 请求和响应的 Pydantic 模型。例如 `BacktestRequest`, `SimulationStatusResponse`, `AvailableStrategy`, `StartSimulationRequest` 等，确保了清晰的接口定义和数据校验。
+    *   **数据模型**: 用于 API 请求和响应的 Pydantic 模型。例如 `BacktestRequest`, `SimulationStatusResponse`, `AvailableStrategy`, `StartSimulationRequest` 等，确保了清晰的接口定义和数据校验。Pydantic 模型如 `HoldingStatus` 和 `PortfolioStatusResponse` 已更新以包含新的盈亏和资产分配字段。新增了 `ApiRiskAlert` 模型用于表示风险告警。
     *   **全局模拟会话管理**: 后端维护一个全局状态来管理当前的实时模拟会话。这包括：
         *   **策略注册表 (`STRATEGY_REGISTRY`)**: 一个集中的地方，用于注册所有可用于实时模拟的策略（如 `RealtimeSimpleMAStrategy` 和 `RealtimeRSIStrategy`）及其元数据（如参数定义、描述等）。
         *   **动态组件生命周期**: 当收到 `/api/simulation/start` 请求时，后端会：
             1.  根据请求的 `strategy_id` 从策略注册表中查找策略。
-            2.  动态实例化所需的核心引擎组件：`MockPortfolio` (使用请求的或默认的初始资金)，`MockTradingEngine`，特定策略实例 (如 `RealtimeSimpleMAStrategy` 或 `RealtimeRSIStrategy`，传递用户提供的参数)，以及 `MockRealtimeDataProvider` (根据策略参数配置，例如股票代码 `symbol`)。
+            2.  动态实例化所需的核心引擎组件：`MockPortfolio` (使用请求的或默认的初始资金)，`MockTradingEngine` (关联Portfolio, 并配置风险规则)，特定策略实例 (如 `RealtimeSimpleMAStrategy` 或 `RealtimeRSIStrategy`，传递用户提供的参数)，以及 `MockRealtimeDataProvider` (根据策略参数配置，例如股票代码 `symbol`)。
             3.  将这些组件关联起来（例如，策略的信号回调连接到交易引擎）。
             4.  启动数据提供者和策略。
         *   **状态管理与启停**: 通过 `stop_current_simulation(clear_all_components: bool)` 内部函数控制模拟的停止。`clear_all_components=True` (如启动新模拟前或应用关闭时调用) 会完全清除所有组件实例和状态。`clear_all_components=False` (如 `/api/simulation/stop` 端点调用) 则只停止活动组件，保留投资组合等状态以供后续查询。
@@ -82,15 +83,17 @@ sequenceDiagram
     loop 定期轮询 (若模拟运行中或有历史状态)
         前端->>后端: GET /api/simulation/status
         后端->>投资组合: 获取投资组合详情
-        投资组合-->>后端: 投资组合数据 (现金, 持仓等)
+        投资组合-->>后端: 投资组合数据 (现金, 持仓, 盈亏详情, 资产分配)
         后端->>当前数据提供者实例: (若运行中) 获取持仓当前价格
         当前数据提供者实例-->>后端: 当前价格
         后端->>交易引擎: 获取最近交易记录
         交易引擎-->>后端: 交易日志
+        后端->>交易引擎: 获取活动风险告警
+        交易引擎-->>后端: 风险告警列表
         后端->>当前策略实例: 获取策略名称和参数 (simulation_components.strategy_info)
         当前策略实例-->>后端: 策略详情
-        后端-->>前端: SimulationStatusResponse
-        前端->>用户: 更新 UI (投资组合, 交易, 策略信息)
+        后端-->>前端: SimulationStatusResponse (含更新的投资组合信息和风险告警)
+        前端->>用户: 更新 UI (投资组合, 交易, 策略信息, 风险告警)
     end
 
     Note over 当前数据提供者实例, 当前策略实例: 实时数据流与信号处理 (后台运行)
@@ -118,7 +121,7 @@ sequenceDiagram
     后端 (FastAPI API)->>策略注册表 (STRATEGY_REGISTRY): 查询 strategy_id 定义
     策略注册表 (STRATEGY_REGISTRY)-->>后端 (FastAPI API): 返回策略类和元数据
     后端 (FastAPI API)->>核心引擎 (动态实例化): 创建 MockPortfolio (含初始资金)
-    后端 (FastAPI API)->>核心引擎 (动态实例化): 创建 MockTradingEngine (关联Portfolio)
+    后端 (FastAPI API)->>核心引擎 (动态实例化): 创建 MockTradingEngine (关联Portfolio, 配置风险规则)
     后端 (FastAPI API)->>核心引擎 (动态实例化): 创建 MockRealtimeDataProvider (根据策略参数配置symbol等)
     后端 (FastAPI API)->>核心引擎 (动态实例化): 创建 选定策略实例 (例如 RealtimeSimpleMAStrategy 或 RealtimeRSIStrategy，关联DataProvider，信号回调至Engine)
     后端 (FastAPI API)->>核心引擎 (动态实例化): 调用 DataProvider.start() 和 Strategy.start()

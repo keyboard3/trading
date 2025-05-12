@@ -1,6 +1,31 @@
 from typing import List, Dict, Any, Optional, Callable
 import time
 import collections
+import sys
+import os
+
+# Attempt to import LogColors from the new backend.logger_utils
+# This might require adjusting PYTHONPATH if core_engine is not structured as a sub-package of backend
+# or if they are distinct top-level packages.
+# For a typical structure where backend and core_engine are top-level or under a common root recognised by Python:
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+try:
+    from backend.logger_utils import LogColors
+except ImportError:
+    print("Critical Error: Could not import LogColors from backend.logger_utils. Colored logs will not be available in RiskManager.")
+    # Define a fallback LogColors class if import fails, so the rest of the code doesn't break
+    class LogColors:
+        HEADER = ''
+        OKBLUE = ''
+        OKCYAN = ''
+        OKGREEN = ''
+        WARNING = ''
+        FAIL = ''
+        ENDC = ''
+        BOLD = ''
+        UNDERLINE = ''
 
 # Assuming MockPortfolio is in a sibling file or accessible via PYTHONPATH
 # from .portfolio import MockPortfolio # Example for relative import if in same package
@@ -43,7 +68,7 @@ def check_stop_loss_per_position(
                         f"Avg Cost: {avg_cost:.2f}, Current Price: {current_price:.2f}, Qty: {quantity}."
                     )
                     alerts.append(RiskAlert('STOP_LOSS_PER_POSITION', symbol, message, time.time()))
-                    if verbose: print(f"RiskManager: {message}")
+                    if verbose: print(f"{LogColors.WARNING}RiskManager: {message}{LogColors.ENDC}")
     return alerts
 
 def check_max_position_size(
@@ -60,6 +85,7 @@ def check_max_position_size(
     """
     alerts = []
     if total_portfolio_value == 0: # Avoid division by zero
+        if verbose: print(f"{LogColors.WARNING}RiskManager: Total portfolio value is 0, cannot check max position size.{LogColors.ENDC}")
         return alerts
 
     # Check existing positions (post-trade or general check)
@@ -75,7 +101,7 @@ def check_max_position_size(
                     f"Market Value: {market_value:.2f}, Portfolio Value: {total_portfolio_value:.2f}."
                 )
                 alerts.append(RiskAlert('MAX_POSITION_SIZE', symbol, message, time.time()))
-                if verbose: print(f"RiskManager: {message}")
+                if verbose: print(f"{LogColors.WARNING}RiskManager: {message}{LogColors.ENDC}")
 
     # Pre-trade check for the specific symbol being traded if provided
     if symbol_being_traded and potential_new_market_value is not None:
@@ -93,7 +119,7 @@ def check_max_position_size(
                         f"Potential Market Value: {potential_new_market_value:.2f}, Portfolio Value: {total_portfolio_value:.2f}."
                     )
                     alerts.append(RiskAlert('MAX_POSITION_SIZE_PRE_TRADE', symbol_being_traded, message, time.time()))
-                    if verbose: print(f"RiskManager: {message}")
+                    if verbose: print(f"{LogColors.WARNING}RiskManager: {message}{LogColors.ENDC}")
     return alerts
 
 def check_max_account_drawdown(
@@ -108,6 +134,7 @@ def check_max_account_drawdown(
     """
     alerts = []
     if peak_portfolio_value <= 0: # Avoid issues if peak is zero or negative (e.g. initial error)
+        if verbose: print(f"{LogColors.WARNING}RiskManager: Peak portfolio value is non-positive ({peak_portfolio_value}), cannot check max account drawdown.{LogColors.ENDC}")
         return alerts
 
     drawdown = (peak_portfolio_value - current_total_portfolio_value) / peak_portfolio_value
@@ -118,7 +145,7 @@ def check_max_account_drawdown(
             f"Peak Value: {peak_portfolio_value:.2f}, Current Value: {current_total_portfolio_value:.2f}."
         )
         alerts.append(RiskAlert('MAX_ACCOUNT_DRAWDOWN', None, message, time.time()))
-        if verbose: print(f"RiskManager: {message}")
+        if verbose: print(f"{LogColors.WARNING}RiskManager: {message}{LogColors.ENDC}")
     return alerts
 
 
@@ -202,7 +229,7 @@ if __name__ == '__main__':
     }
     sl_alerts = check_stop_loss_per_position(mock_holdings_details_loss, risk_parameters['stop_loss_pct'], verbose=True)
     for alert in sl_alerts:
-        print(f"  ALERT: {alert}")
+        print(f"{LogColors.FAIL}  ALERT: {alert}{LogColors.ENDC}") # Using FAIL for test alerts
     assert any(a.alert_type == 'STOP_LOSS_PER_POSITION' and a.symbol == 'AAPL' for a in sl_alerts)
 
     # Test Max Position Size (Post-trade)
@@ -214,7 +241,7 @@ if __name__ == '__main__':
     }
     ps_alerts = check_max_position_size(mock_holdings_details_pos_size, portfolio_state_ps['total_value'], risk_parameters['max_pos_pct'], verbose=True)
     for alert in ps_alerts:
-        print(f"  ALERT: {alert}")
+        print(f"{LogColors.FAIL}  ALERT: {alert}{LogColors.ENDC}")
     assert any(a.alert_type == 'MAX_POSITION_SIZE' and a.symbol == 'GOOG' for a in ps_alerts)
 
     # Test Max Position Size (Pre-trade)
@@ -233,7 +260,7 @@ if __name__ == '__main__':
         verbose=True
     )
     for alert in pre_ps_alerts:
-        print(f"  ALERT: {alert}")
+        print(f"{LogColors.FAIL}  ALERT: {alert}{LogColors.ENDC}")
     assert any(a.alert_type == 'MAX_POSITION_SIZE_PRE_TRADE' and a.symbol == 'GOOG' for a in pre_ps_alerts)
 
 
@@ -246,7 +273,7 @@ if __name__ == '__main__':
     }
     dd_alerts = check_max_account_drawdown(portfolio_state_dd['total_value'], portfolio_state_dd['peak_value'], risk_parameters['max_dd_pct'], verbose=True)
     for alert in dd_alerts:
-        print(f"  ALERT: {alert}")
+        print(f"{LogColors.FAIL}  ALERT: {alert}{LogColors.ENDC}")
     assert any(a.alert_type == 'MAX_ACCOUNT_DRAWDOWN' for a in dd_alerts)
 
     # Test Evaluate All Risks
@@ -267,7 +294,7 @@ if __name__ == '__main__':
     all_risk_alerts = evaluate_all_risks(portfolio_state_all, risk_parameters, verbose=True)
     print("\nAll Alerts from evaluate_all_risks:")
     for alert in all_risk_alerts:
-        print(f"  ALERT: {alert}")
+        print(f"{LogColors.FAIL}  ALERT: {alert}{LogColors.ENDC}")
     
     assert any(a.alert_type == 'STOP_LOSS_PER_POSITION' and a.symbol == 'AAPL' for a in all_risk_alerts)
     assert any(a.alert_type == 'MAX_POSITION_SIZE' and a.symbol == 'GOOG' for a in all_risk_alerts)

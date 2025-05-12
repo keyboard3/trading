@@ -8,40 +8,37 @@ interface RiskAlertsDisplayProps {
 const RiskAlertsDisplay: React.FC<RiskAlertsDisplayProps> = ({ alerts }) => {
   if (!alerts || alerts.length === 0) {
     return (
-      <div className="p-3 bg-gray-700 rounded-lg shadow text-sm text-gray-300">
-        无风险告警。
+      <div className="p-4 bg-gray-800 text-white rounded-lg shadow mb-4">
+        <h3 className="text-xl font-semibold mb-2 text-blue-400">风险告警</h3>
+        <p className="text-sm text-gray-400">当前无风险告警。</p>
       </div>
     );
   }
 
-  const formatAlertType = (alertType: string): string => {
-    // Simple mapping for now, can be expanded
-    const typeMap: Record<string, string> = {
-      'STOP_LOSS_PER_POSITION': '个股止损',
-      'MAX_POSITION_SIZE': '最大持仓规模 (个股)',
-      'MAX_POSITION_SIZE_PRE_TRADE': '预交易-最大持仓规模 (个股)',
-      'MAX_ACCOUNT_DRAWDOWN': '账户最大回撤',
-    };
-    return typeMap[alertType] || alertType.replace(/_/g, ' '); // Fallback to space-separated type
+  const getAlertColor = (alertType: string) => {
+    if (alertType.includes('STOP_LOSS')) return 'text-red-400';
+    if (alertType.includes('DRAWDOWN')) return 'text-red-500';
+    if (alertType.includes('MAX_POSITION')) return 'text-yellow-400';
+    return 'text-gray-300'; // Default color for unknown types
   };
 
   return (
-    <div className="p-4 bg-red-800 border border-red-700 rounded-lg shadow text-white">
-      <h4 className="text-md font-semibold mb-2 text-yellow-300">风险告警</h4>
-      <ul className="space-y-2 text-xs">
+    <div className="p-4 bg-gray-800 text-white rounded-lg shadow mb-4">
+      <h3 className="text-xl font-semibold mb-3 text-blue-400">风险告警</h3>
+      <div className="space-y-3 max-h-60 overflow-y-auto pr-2"> {/* Added max height and scroll */} 
         {alerts.map((alert, index) => (
-          <li key={index} className="p-2 bg-red-700 rounded">
-            <div className="font-medium text-yellow-400">
-              类型: {formatAlertType(alert.alert_type)}
-              {alert.symbol && <span className="ml-2">(代码: {alert.symbol})</span>}
+          <div key={index} className={`p-3 rounded-md bg-gray-700 shadow-sm border-l-4 ${getAlertColor(alert.alert_type).replace('text-', 'border-')}`}>
+            <div className="flex justify-between items-center mb-1">
+              <span className={`font-semibold ${getAlertColor(alert.alert_type)}`}>
+                {alert.alert_type}
+                {alert.symbol && <span className="ml-2 font-normal text-gray-400">({alert.symbol})</span>}
+              </span>
+              <span className="text-xs text-gray-500">{new Date(alert.timestamp * 1000).toLocaleString()}</span>
             </div>
-            <p className="text-red-200 mt-1">消息: {alert.message}</p>
-            <p className="text-xs text-red-300 mt-1">
-              时间: {new Date(alert.timestamp * 1000).toLocaleString()}
-            </p>
-          </li>
+            <p className="text-sm text-gray-300">{alert.message}</p>
+          </div>
         ))}
-      </ul>
+      </div>
     </div>
   );
 };

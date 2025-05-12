@@ -27,6 +27,11 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null); // For success/info messages from start/stop
 
+  // Risk Parameters States (User inputs percentages, e.g., 10 for 10%)
+  const [stopLossPct, setStopLossPct] = useState<string>('10'); // Default 10%
+  const [maxPositionPct, setMaxPositionPct] = useState<string>('25'); // Default 25%
+  const [accountMaxDrawdownPct, setAccountMaxDrawdownPct] = useState<string>('15'); // Default 15%
+
   useEffect(() => {
     const loadStrategies = async () => {
       setIsLoadingStrategies(true);
@@ -100,6 +105,40 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
       return;
     }
 
+    // --- Validate and prepare risk parameters ---
+    const riskParams: Record<string, number> = {};
+    const slPct = parseFloat(stopLossPct);
+    const mpPct = parseFloat(maxPositionPct);
+    const amdPct = parseFloat(accountMaxDrawdownPct);
+    let riskValidationError = false;
+
+    if (!isNaN(slPct) && slPct > 0) {
+      riskParams['stop_loss_pct'] = slPct / 100;
+    } else if (stopLossPct !== '') { // Allow empty if user wants to use backend default
+      setError('个股止损百分比必须是正数，或留空以使用默认值。');
+      riskValidationError = true;
+    }
+
+    if (!isNaN(mpPct) && mpPct > 0 && mpPct <= 100) {
+      riskParams['max_pos_pct'] = mpPct / 100;
+    } else if (maxPositionPct !== '') {
+      setError('单资产最大持仓百分比必须是0到100之间的正数，或留空。');
+      riskValidationError = true;
+    }
+
+    if (!isNaN(amdPct) && amdPct > 0 && amdPct <= 100) {
+      riskParams['max_dd_pct'] = amdPct / 100;
+    } else if (accountMaxDrawdownPct !== '') {
+      setError('账户最大回撤百分比必须是0到100之间的正数，或留空。');
+      riskValidationError = true;
+    }
+
+    if (riskValidationError) {
+      setIsLoadingAction(false);
+      return;
+    }
+    // --- End of Risk Parameters Validation ---
+
     setIsLoadingAction(true);
     setError(null);
     setActionMessage(null);
@@ -133,6 +172,7 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
         strategy_id: selectedStrategyId,
         parameters: finalParameters,
         initial_capital: capitalBase, // Send base unit to payload
+        risk_parameters: Object.keys(riskParams).length > 0 ? riskParams : undefined, // Add risk_parameters, send undefined if empty
       };
       const response = await startSimulation(payload);
       setActionMessage(response.message || '模拟已成功启动。');
@@ -243,6 +283,76 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
           </div>
           <div className="param-description-container">
             <small>模拟开始时的账户现金 (万元)</small>
+          </div>
+        </div>
+      )}
+
+      {/* --- Risk Parameters Section --- */}
+      {selectedStrategyId && ( // Only show if a strategy is selected
+        <div className="risk-parameters-section mt-3 border-t pt-3">
+          <h6 className="mb-2 font-semibold text-sm">风险参数配置:</h6>
+          
+          {/* Stop Loss Percentage */}
+          <div className="form-group param-row">
+            <div className="param-label-container">
+              <label htmlFor="stop-loss-pct">个股止损 (%):</label>
+            </div>
+            <div className="param-input-container">
+              <input
+                type="number"
+                id="stop-loss-pct"
+                value={stopLossPct}
+                onChange={e => setStopLossPct(e.target.value)}
+                disabled={isRunning}
+                className="w-full disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50"
+                placeholder="例如: 10 (表示10%)"
+              />
+            </div>
+            <div className="param-description-container">
+              <small>单笔持仓最大亏损容忍度。</small>
+            </div>
+          </div>
+
+          {/* Max Position Percentage */}
+          <div className="form-group param-row mt-2">
+            <div className="param-label-container">
+              <label htmlFor="max-position-pct">单资产最大持仓 (%):</label>
+            </div>
+            <div className="param-input-container">
+              <input
+                type="number"
+                id="max-position-pct"
+                value={maxPositionPct}
+                onChange={e => setMaxPositionPct(e.target.value)}
+                disabled={isRunning}
+                className="w-full disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50"
+                placeholder="例如: 25 (表示25%)"
+              />
+            </div>
+            <div className="param-description-container">
+              <small>单一资产市值占总资产最大比例。</small>
+            </div>
+          </div>
+
+          {/* Account Max Drawdown Percentage */}
+          <div className="form-group param-row mt-2">
+            <div className="param-label-container">
+              <label htmlFor="account-max-drawdown-pct">账户最大回撤 (%):</label>
+            </div>
+            <div className="param-input-container">
+              <input
+                type="number"
+                id="account-max-drawdown-pct"
+                value={accountMaxDrawdownPct}
+                onChange={e => setAccountMaxDrawdownPct(e.target.value)}
+                disabled={isRunning}
+                className="w-full disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50"
+                placeholder="例如: 15 (表示15%)"
+              />
+            </div>
+            <div className="param-description-container">
+              <small>账户总净值从峰值最大回落容忍度。</small>
+            </div>
           </div>
         </div>
       )}

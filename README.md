@@ -68,7 +68,7 @@ pip install -r requirements.txt
     ```bash
     make run-api
     ```
-    服务通常会运行在 `http://0.0.0.0:8000`。您可以通过浏览器访问 `http://localhost:8000/docs` 来查看和交互API文档。
+    服务通常会运行在 `http://0.0.0.0:8089`。您可以通过浏览器访问 `http://localhost:8089/docs` 来查看和交互API文档。
 *   **启动前端开发服务器:**
     前端 React 应用位于 `frontend/` 目录。
     ```bash
@@ -103,7 +103,7 @@ pip install -r requirements.txt
 *   直接运行 FastAPI 服务 (不推荐用于日常开发，`make run-api`更好):
     ```bash
     # 确保在项目根目录执行
-    uvicorn backend.main_api:app --reload --host 0.0.0.0 --port 8000
+    uvicorn backend.main_api:app --reload --host 0.0.0.0 --port 8089
     ```
 
 ### 5. (可选) 退出虚拟环境

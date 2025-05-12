@@ -265,7 +265,7 @@ async def startup_event():
             print(f"Error creating API results directory {api_runs_full_path}: {e}")
     
     # Mount static files directory for API results
-    # This allows accessing files like http://localhost:8000/api_runs/<run_id>/report.txt
+    # This allows accessing files like http://localhost:8089/api_runs/<run_id>/report.txt
     app.mount(API_RESULTS_MOUNT_PATH, 
               StaticFiles(directory=api_runs_full_path), 
               name="api_results_static")
@@ -745,4 +745,4 @@ if __name__ == "__main__":
         except OSError as e:
             print(f"Error creating API results directory for direct run {_api_runs_full_path_for_direct_run}: {e}")
 
-    uvicorn.run(app, host="127.0.0.1", port=8000) 
+    uvicorn.run(app, host="127.0.0.1", port=8089) 

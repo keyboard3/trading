@@ -38,8 +38,8 @@ install-deps: check-venv
 	$(PIP_EXEC) install -r requirements.txt
 
 run-api: check-venv
-	@echo "Starting FastAPI API server on http://0.0.0.0:8000 (using $(UVICORN_EXEC))..."
-	$(UVICORN_EXEC) backend.main_api:app --reload --host 0.0.0.0 --port 8000
+	@echo "Starting FastAPI API server on http://0.0.0.0:8089 (using $(UVICORN_EXEC))..."
+	$(UVICORN_EXEC) backend.main_api:app --reload --host 0.0.0.0 --port 8089
 
 run-backtest-main: check-venv
 	@echo "Running main batch backtesting script (main.py) (using $(PYTHON_EXEC))..."

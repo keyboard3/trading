@@ -268,7 +268,7 @@ if __name__ == '__main__':
     print("\nTesting Max Account Drawdown:")
     portfolio_state_dd = {
         'holdings_details': [], # Holdings content doesn't matter for this specific check
-        'total_value': 8000.0, 
+        'total_value': 8089.0, 
         'peak_value': 10000.0 # 20% drawdown
     }
     dd_alerts = check_max_account_drawdown(portfolio_state_dd['total_value'], portfolio_state_dd['peak_value'], risk_parameters['max_dd_pct'], verbose=True)

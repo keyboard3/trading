@@ -1,6 +1,6 @@
 import type { SimulationStatusResponse, AvailableStrategy, StartSimulationPayload, BackendResponseMessage } from './types';
 
-const API_BASE_URL = 'http://localhost:8000'; // Assuming backend runs on port 8000
+const API_BASE_URL = 'http://localhost:8089'; // Assuming backend runs on port 8089
 
 export async function fetchSimulationStatus(): Promise<SimulationStatusResponse> {
   try {

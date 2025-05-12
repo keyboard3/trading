@@ -21,7 +21,7 @@ alwaysApply: false
 
 **后端执行:**
 *   使用 `make run-api` 运行。
-*   API 文档通常位于 `http://localhost:8000/docs`。
+*   API 文档通常位于 `http://localhost:8089/docs`。
 
 **前端执行:**
 1.  导航到 `[frontend/](mdc:frontend)` 目录。

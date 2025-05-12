@@ -25,12 +25,7 @@ check-venv:
 		echo "or update VENV_DIR in the Makefile."; \
 		exit 1; \
 	fi
-	@if [ ! -f "$(UVICORN_EXEC)" ]; then \
-		echo "Error: Uvicorn executable not found at $(UVICORN_EXEC)"; \
-		echo "Have you installed dependencies (e.g., make install-deps or pip install uvicorn)?"; \
-		exit 1; \
-	fi
-	@echo "Virtual environment executables seem to be correctly pathed."
+	@echo "Virtual environment Python executable seems to be correctly pathed."
 
 # Target to install dependencies (assuming requirements.txt exists)
 install-deps: check-venv
@@ -38,6 +33,11 @@ install-deps: check-venv
 	$(PIP_EXEC) install -r requirements.txt
 
 run-api: check-venv
+	@if [ ! -f "$(UVICORN_EXEC)" ]; then \
+		echo "Error: Uvicorn executable not found at $(UVICORN_EXEC)"; \
+		echo "Have you installed dependencies (e.g., make install-deps or pip install uvicorn)?"; \
+		exit 1; \
+	fi
 	@echo "Starting FastAPI API server on http://0.0.0.0:8089 (using $(UVICORN_EXEC))..."
 	$(UVICORN_EXEC) backend.main_api:app --reload --host 0.0.0.0 --port 8089
 

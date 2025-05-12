@@ -1,4 +1,6 @@
 pandas
 matplotlib
 numpy
-yfinance 
+yfinance
+fastapi
+uvicorn[standard] 

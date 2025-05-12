@@ -26,7 +26,11 @@ export interface PortfolioStatus {
   cash: number;
   holdings_value: number;
   total_value: number;
+  realized_pnl: number;
+  unrealized_pnl: number;
+  total_pnl: number;
   holdings: HoldingStatus[];
+  asset_allocation: Record<string, number>;
   is_running: boolean;
 }
 
@@ -42,6 +46,7 @@ export interface SimulationStatusResponse {
   recent_trades: ApiTradeRecord[];
   active_strategy?: ApiStrategyInfo | null; 
   is_simulation_running: boolean; // Added to match backend
+  risk_alerts?: ApiRiskAlert[] | null; // New field for risk alerts
 }
 
 // --- New Types for Strategy Switching ---
@@ -75,4 +80,12 @@ export interface BackendResponseMessage {
   message: string;
   // Optionally, include other fields if the backend sends more details
   // error?: string;
+}
+
+// Corresponds to backend Pydantic model: ApiRiskAlert
+export interface ApiRiskAlert {
+  alert_type: string;
+  symbol?: string | null;
+  message: string;
+  timestamp: number;
 } 

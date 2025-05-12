@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchSimulationStatus } from '../api';
-import type { SimulationStatusResponse } from '../types'; // Type-only import
+import type { SimulationStatusResponse, ApiRiskAlert } from '../types'; // Added ApiRiskAlert
 import PortfolioSummary from './PortfolioSummary';
 import HoldingsTable from './HoldingsTable';
 import TradesList from './TradesList';
 import StrategyInfoDisplay from './StrategyInfoDisplay';
+import RiskAlertsDisplay from './RiskAlertsDisplay'; // Import the new component
 
 const POLLING_INTERVAL_MS = 3000; // Poll every 3 seconds, was 5
 
@@ -91,6 +92,13 @@ const SimulationDisplay: React.FC<SimulationDisplayProps> = ({ onDataRefreshed }
         <div className="p-2 my-2 border border-red-500/50 rounded-md text-red-400 text-xs">
           <p><span className="font-medium">状态更新遇到问题:</span> {error}</p>
           <p className="mt-1">当前显示的数据可能已过时。系统将继续尝试自动刷新。</p>
+        </div>
+      )}
+
+      {/* Render RiskAlertsDisplay if there are alerts, regardless of loading state for stale data */} 
+      {simulationData && simulationData.risk_alerts && simulationData.risk_alerts.length > 0 && (
+        <div className="my-4">
+          <RiskAlertsDisplay alerts={simulationData.risk_alerts} />
         </div>
       )}
 

@@ -34,6 +34,7 @@ try:
     from core_engine.realtime_feed import MockRealtimeDataProvider
     from strategies.simple_ma_strategy import RealtimeSimpleMAStrategy
     from strategies.realtime_rsi_strategy import RealtimeRSIStrategy # Add import for RSI strategy
+    from core_engine.risk_manager import RiskAlert # Import RiskAlert
 except ImportError as e:
     print(f"Error importing from main.py or core_engine: {e}")
     # Fallbacks (existing + new for simulation components)
@@ -54,6 +55,7 @@ except ImportError as e:
     RealtimeRSIStrategy = None # Add fallback for RSI strategy
     SignalEvent = Dict # Fallback type
     TradeRecord = Dict # Fallback type
+    RiskAlert = Any # Fallback type for RiskAlert
 
 
 # Remove the local, simplified STRATEGY_CONFIG
@@ -93,6 +95,10 @@ simulation_components: Dict[str, Any] = {
 # Lock for thread-safe access to simulation state if needed later
 # simulation_lock = threading.Lock()
 
+# --- Risk Management Parameters (Global Constants for now) ---
+RISK_MAX_UNREALIZED_LOSS_PER_POSITION_PERCENTAGE: float = 0.10 # 10% loss tolerance per position
+RISK_MAX_POSITION_SIZE_PERCENTAGE_OF_PORTFOLIO: float = 0.25  # Max 25% of portfolio value in a single asset
+RISK_MAX_ACCOUNT_DRAWDOWN_PERCENTAGE: float = 0.15             # Max 15% drawdown from peak portfolio value
 
 # --- Pydantic Models for Simulation API --- 
 class HoldingStatus(BaseModel):
@@ -107,8 +113,12 @@ class PortfolioStatusResponse(BaseModel):
     cash: float
     holdings_value: float # Market value of all holdings
     total_value: float    # cash + holdings_value
-    holdings: List[HoldingStatus]
-    is_running: bool
+    realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    total_pnl: float = 0.0
+    holdings: List[HoldingStatus] # This will now use the enhanced HoldingStatus
+    asset_allocation: Dict[str, float] = {} # e.g. {'MSFT': 40.0, 'AAPL': 60.0}
+    is_running: bool # Kept from previous version, indicates if data provider/strategy is active
 
 # Re-using TradeRecord structure from trading_engine, but defining a Pydantic model for API clarity
 class ApiTradeRecord(BaseModel):
@@ -124,11 +134,19 @@ class ApiStrategyInfo(BaseModel): # New model for strategy info
     name: str
     parameters: Dict[str, Any]
 
+# Pydantic model for RiskAlert to be used in API responses
+class ApiRiskAlert(BaseModel):
+    alert_type: str
+    symbol: Optional[str] = None
+    message: str
+    timestamp: float
+
 class SimulationStatusResponse(BaseModel):
     portfolio_status: Optional[PortfolioStatusResponse] = None # Made optional
     recent_trades: List[ApiTradeRecord] = [] # Default to empty list
     active_strategy: Optional[ApiStrategyInfo] = None 
     is_simulation_running: bool # New field to clearly indicate if any simulation is running
+    risk_alerts: Optional[List[ApiRiskAlert]] = None # New field for risk alerts
 
 # --- New Pydantic Models for Strategy Switching ---
 class StrategyParameterSpec(BaseModel):
@@ -442,92 +460,98 @@ async def get_simulation_status():
     # global simulation_portfolio, simulation_engine, simulation_strategy_A_info, simulation_running
     global simulation_components
 
-    # If not running AND portfolio is None, it means no simulation was ever run or it was fully cleared.
-    # If not running BUT portfolio exists, it means a simulation was run and then stopped, state should be available.
-    if not simulation_components["portfolio"]:
-        # This covers: never run, or fully reset/cleared simulation
+    if not simulation_components.get("portfolio") or not simulation_components.get("engine") or not simulation_components.get("data_provider") :
+        # If essential components are not initialized, return a default "not running" or minimal state
         return SimulationStatusResponse(
-            portfolio_status=None,
-            recent_trades=[],
-            active_strategy=None,
-            is_simulation_running=False # Explicitly false
+            portfolio_status=None, 
+            recent_trades=[], 
+            active_strategy=simulation_components.get("strategy_info"), # Still show strategy if configured but not running
+            is_simulation_running=False
         )
 
-    portfolio = simulation_components["portfolio"]
-    engine = simulation_components["engine"] # Engine should also persist if portfolio does
-    strategy_info = simulation_components["strategy_info"] # Persists with portfolio/engine
-    is_currently_running = simulation_components["running"] # The true current running state
+    portfolio: MockPortfolio = simulation_components["portfolio"]
+    engine: MockTradingEngine = simulation_components["engine"]
+    data_provider: MockRealtimeDataProvider = simulation_components["data_provider"]
     
-    # Data provider is only relevant if is_currently_running is True for fetching latest prices
-    data_provider = simulation_components.get("data_provider") if is_currently_running else None
-    
-    holdings_list = []
-    current_total_holdings_value = 0.0
-    for symbol, details in portfolio.get_holdings().items():
-        current_price = data_provider.get_current_price(symbol) if data_provider else None
-        market_value = None
-        unrealized_pnl = None
-        if current_price is not None:
-            market_value = details['quantity'] * current_price
-            current_total_holdings_value += market_value
-            unrealized_pnl = market_value - (details['quantity'] * details['average_cost_price'])
+    # Helper to provide current price for portfolio calculations
+    def get_current_price_for_portfolio(symbol: str) -> Optional[float]:
+        if simulation_components["data_provider"] and hasattr(simulation_components["data_provider"], 'get_current_price'):
+            return simulation_components["data_provider"].get_current_price(symbol)
+        return None
 
-        holdings_list.append(HoldingStatus(
-            symbol=symbol,
-            quantity=details['quantity'],
-            average_cost_price=details['average_cost_price'],
-            current_price=current_price,
-            market_value=market_value,
-            unrealized_pnl=unrealized_pnl,
-        ))
-    
-    # Instead of calling get_holdings_value and get_total_portfolio_value on portfolio,
-    # we calculate them here based on current prices from the data provider.
-    # This ensures the portfolio status reflects the latest market prices.
-    # portfolio.get_current_price_callback = data_provider.get_current_price if data_provider else None
-    # holdings_value = portfolio.get_holdings_value() # This would need to be updated for current prices
-    # total_value = portfolio.get_total_portfolio_value()
-    
-    cash = portfolio.cash
-    total_value = cash + current_total_holdings_value
+    # Get detailed holdings from portfolio
+    # The get_holdings_with_details method returns a list of dicts.
+    # We need to convert them to HoldingStatus Pydantic models.
+    detailed_holdings_data = portfolio.get_holdings_with_details(get_current_price_for_portfolio)
+    pydantic_holdings_list: List[HoldingStatus] = []
+    for h_data in detailed_holdings_data:
+        pydantic_holdings_list.append(
+            HoldingStatus(
+                symbol=h_data['symbol'],
+                quantity=h_data['quantity'],
+                average_cost_price=h_data['average_cost_price'],
+                current_price=h_data.get('current_price'), # .get() for safety if field is missing
+                market_value=h_data.get('market_value'),
+                unrealized_pnl=h_data.get('unrealized_pnl')
+            )
+        )
 
-    portfolio_status_resp = PortfolioStatusResponse(
-        cash=cash,
-        holdings_value=current_total_holdings_value, 
-        total_value=total_value, 
-        holdings=holdings_list,
-        is_running=is_currently_running # Reflects the actual running state
+    current_portfolio_status = PortfolioStatusResponse(
+        cash=portfolio.get_cash(),
+        holdings_value=portfolio.get_holdings_value(get_current_price_for_portfolio),
+        total_value=portfolio.get_total_portfolio_value(get_current_price_for_portfolio),
+        realized_pnl=portfolio.get_realized_pnl(),
+        unrealized_pnl=portfolio.get_unrealized_pnl(get_current_price_for_portfolio),
+        total_pnl=portfolio.get_total_pnl(get_current_price_for_portfolio),
+        holdings=pydantic_holdings_list,
+        asset_allocation=portfolio.get_asset_allocation_percentages(get_current_price_for_portfolio),
+        is_running=simulation_components.get("running", False)
     )
 
-    # Get recent trades
-    raw_trades = engine.get_trade_log()[-10:] if engine else [] # Handle if engine is None (e.g. after a full clear)
-    recent_trades_api = []
-    for trade_rec in raw_trades:
-        # Assuming trade_rec is a dict-like object (e.g. TradeRecord which is a NamedTuple)
-        # or directly a dict if it was converted. Let's assume it has ._asdict() if NamedTuple
-        # or is directly subscriptable if it's already a dict.
-        if hasattr(trade_rec, '_asdict'): # For NamedTuple
-            rec_dict = trade_rec._asdict()
-        elif isinstance(trade_rec, dict):
-            rec_dict = trade_rec
-        else: # Fallback if it's an object with attributes
-            rec_dict = {
-                "trade_id": getattr(trade_rec, 'trade_id', str(uuid.uuid4())), # Ensure ID if missing
-                "symbol": getattr(trade_rec, 'symbol', 'UNKNOWN'),
-                "timestamp": getattr(trade_rec, 'timestamp', time.time()),
-                "type": getattr(trade_rec, 'type', 'UNKNOWN_TYPE'),
-                "quantity": getattr(trade_rec, 'quantity', 0),
-                "price": getattr(trade_rec, 'price', 0.0),
-                "total_value": getattr(trade_rec, 'total_value', 0.0)
-            }
-        recent_trades_api.append(ApiTradeRecord(**rec_dict))
+    # Get recent trades from engine
+    # Engine's trade_log is a list of TradeRecord (which are dicts)
+    # Convert them to ApiTradeRecord Pydantic models.
+    api_trades_list: List[ApiTradeRecord] = []
+    for trade_rec_dict in engine.get_trade_log(): # Assuming get_trade_log returns a list of dicts
+        try:
+            # Ensure all fields expected by ApiTradeRecord are present in trade_rec_dict
+            # This is a common source of errors if the dict structure doesn't match.
+            api_trades_list.append(
+                ApiTradeRecord(
+                    trade_id=str(trade_rec_dict.get('trade_id', uuid.uuid4())), # Provide default if missing
+                    symbol=trade_rec_dict['symbol'],
+                    timestamp=trade_rec_dict['timestamp'],
+                    type=trade_rec_dict['type'],
+                    quantity=trade_rec_dict['quantity'],
+                    price=trade_rec_dict['price'],
+                    total_value=trade_rec_dict['total_value']
+                )
+            )
+        except KeyError as e:
+            print(f"BACKEND_API: KeyError when converting trade record to Pydantic model: {e}. Record: {trade_rec_dict}")
+            # Optionally, skip this record or add a placeholder
+            continue 
+        except Exception as e:
+            print(f"BACKEND_API: Unexpected error converting trade record: {e}. Record: {trade_rec_dict}")
+            continue
 
+    active_risk_alerts_response = []
+    if simulation_components["engine"] and hasattr(simulation_components["engine"], 'get_active_risk_alerts'):
+        engine_alerts = simulation_components["engine"].get_active_risk_alerts() # type: List[RiskAlert]
+        for alert_nt in engine_alerts:
+            active_risk_alerts_response.append(ApiRiskAlert(
+                alert_type=alert_nt.alert_type,
+                symbol=alert_nt.symbol,
+                message=alert_nt.message,
+                timestamp=alert_nt.timestamp
+            ))
 
     return SimulationStatusResponse(
-        portfolio_status=portfolio_status_resp,
-        recent_trades=recent_trades_api,
-        active_strategy=strategy_info,
-        is_simulation_running=is_currently_running # Reflect actual running state
+        portfolio_status=current_portfolio_status,
+        recent_trades=api_trades_list[-20:],  # Return last 20 trades for brevity
+        active_strategy=simulation_components.get("strategy_info"),
+        is_simulation_running=simulation_components.get("running", False),
+        risk_alerts=active_risk_alerts_response if active_risk_alerts_response else None
     )
 
 # --- New API Endpoints for Simulation Control ---
@@ -539,60 +563,91 @@ async def get_available_strategies():
 
 @app.post("/api/simulation/start", status_code=200)
 async def start_simulation(request: StartSimulationRequest):
+    # global simulation_portfolio, simulation_engine, simulation_data_provider, simulation_strategy, simulation_strategy_info, simulation_running # Old globals
     global simulation_components
 
-    print(f"BACKEND_API: Received /api/simulation/start request: {request.model_dump()}")
+    print(f"API: Received start_simulation request for strategy_id: {request.strategy_id} with params: {request.parameters}, initial_capital: {request.initial_capital}")
 
-    # When starting a new simulation, we always stop and fully clear previous components
-    # to ensure a fresh start for portfolio, engine etc.
-    if simulation_components["running"] or simulation_components["portfolio"]:
-        print("BACKEND_API: Simulation is already running or has a previous state. Stopping and clearing all components before starting new.")
-        stop_current_simulation(clear_all_components=True) 
+    if simulation_components["running"]:
+        print("API: Simulation already running. Stopping current one before starting new.")
+        stop_current_simulation(clear_all_components=True) # Fully clear before starting new
 
-    strategy_details = STRATEGY_REGISTRY.get(request.strategy_id)
-    if not strategy_details:
-        print(f"BACKEND_API: Strategy ID '{request.strategy_id}' not found in registry.")
-        raise HTTPException(status_code=404, detail=f"Strategy '{request.strategy_id}' not found")
+    if request.strategy_id not in STRATEGY_REGISTRY:
+        raise HTTPException(status_code=404, detail=f"Strategy with id '{request.strategy_id}' not found.")
 
-    # Validate parameters (basic check for required ones, more advanced validation could be added)
-    # For now, assume parameters are mostly correct and let component constructors handle errors.
-    strategy_params = request.parameters
-    data_provider_symbol = strategy_params.get("symbol") # Crucial for MockRealtimeDataProvider
+    selected_strategy_meta = STRATEGY_REGISTRY[request.strategy_id]
 
-    if not data_provider_symbol:
-        print(f"BACKEND_API: 'symbol' parameter missing in request for strategy {request.strategy_id}. Cannot start data provider.")
-        raise HTTPException(status_code=400, detail="'symbol' parameter is required for the strategy and data provider.")
+    # Validate parameters
+    required_params = {p.name for p in selected_strategy_meta.parameters if p.required}
+    provided_params = set(request.parameters.keys())
+    if not required_params.issubset(provided_params):
+        missing_params = required_params - provided_params
+        raise HTTPException(status_code=400, detail=f"Missing required parameters: {missing_params}")
 
-    print(f"BACKEND_API: Preparing to start simulation for strategy '{strategy_details.name}' with symbol '{data_provider_symbol}' and params: {strategy_params}")
+    # Extract the target symbol for the data provider
+    target_symbol = request.parameters.get("symbol")
+    if not target_symbol or not isinstance(target_symbol, str):
+        # This check is important because MockRealtimeDataProvider needs a symbol to mock.
+        # And strategies generally operate on a specific symbol.
+        raise HTTPException(status_code=400, detail="Strategy parameters must include a valid 'symbol' (string).")
+
+    # Determine initial capital
+    initial_capital_to_use = request.initial_capital if request.initial_capital is not None else DEFAULT_INITIAL_CAPITAL
+    print(f"API: Using initial capital: {initial_capital_to_use}")
+
 
     try:
         # 1. Initialize Portfolio
-        # Use provided initial capital if available, otherwise use a default
-        capital_to_use = request.initial_capital if request.initial_capital is not None else DEFAULT_INITIAL_CAPITAL
-        if capital_to_use <= 0: # Double check, though Pydantic model should also enforce gt=0
-            raise ValueError("Initial capital must be a positive value.")
-            
-        portfolio = MockPortfolio(initial_cash=capital_to_use)
-        print(f"BACKEND_API: MockPortfolio initialized with {capital_to_use:.2f}.")
+        simulation_components["portfolio"] = MockPortfolio(
+            initial_cash=initial_capital_to_use,
+            verbose=True
+        )
+        print(f"API: MockPortfolio initialized with cash: {initial_capital_to_use}")
 
-        # 2. Initialize Trading Engine
-        engine = MockTradingEngine(portfolio=portfolio, fixed_trade_quantity=10, verbose=True) # verbose=True for engine logs
-        print(f"BACKEND_API: MockTradingEngine initialized.")
+        # 2. Initialize DataProvider
+        # Construct the symbols_config for MockRealtimeDataProvider
+        # It expects a list of symbol configuration dictionaries.
+        mock_symbol_config = [{
+            'symbol': target_symbol,
+            'initial_price': 100.0,  # Default initial price
+            'volatility': 0.002,     # Default volatility for mock data
+            'interval_seconds': 1.0  # Default interval for mock data ticks
+        }]
+        
+        print(f"API: Initializing MockRealtimeDataProvider with config: {mock_symbol_config}")
+        simulation_components["data_provider"] = MockRealtimeDataProvider(
+            symbols_config=mock_symbol_config, # Corrected parameter name
+            verbose=True
+        )
+        print(f"API: MockRealtimeDataProvider initialized for symbol: {target_symbol}")
 
-        # 3. Initialize Data Provider
-        # The provider needs to be configured with the symbol from the strategy request
-        provider_config = [
-            {'symbol': data_provider_symbol, 'initial_price': 100.0, 'volatility': 0.01, 'interval_seconds': 1.0}
-            # Potentially add other symbols if the strategy or UI supports it, or make initial_price/volatility configurable
-        ]
-        data_provider = MockRealtimeDataProvider(symbols_config=provider_config, verbose=True) # verbose=True for provider logs
-        print(f"BACKEND_API: MockRealtimeDataProvider initialized for symbol '{data_provider_symbol}'.")
+
+        # Callback for trading engine to get current price from data provider
+        def get_price_for_engine(symbol: str) -> Optional[float]:
+            if simulation_components["data_provider"]:
+                return simulation_components["data_provider"].get_current_price(symbol)
+            return None
+
+        # 3. Initialize Trading Engine
+        engine = MockTradingEngine(
+            portfolio=simulation_components["portfolio"], 
+            fixed_trade_quantity=10, # Example, could be a strategy param or global config
+            risk_parameters={
+                'stop_loss_pct': RISK_MAX_UNREALIZED_LOSS_PER_POSITION_PERCENTAGE,
+                'max_pos_pct': RISK_MAX_POSITION_SIZE_PERCENTAGE_OF_PORTFOLIO,
+                'max_dd_pct': RISK_MAX_ACCOUNT_DRAWDOWN_PERCENTAGE
+            }, # Pass risk params
+            current_price_provider_callback=get_price_for_engine, # Pass price callback
+            verbose=True
+        )
+        simulation_components["engine"] = engine
+        if True: print(f"API: MockTradingEngine initialized.")
 
         # 4. Initialize Strategy
         # Ensure all required params for strategy constructor are present
         # Add verbose to strategy constructor call to enable its internal logging
-        strategy_constructor_params = strategy_params.copy()
-        strategy_constructor_params['data_provider'] = data_provider
+        strategy_constructor_params = request.parameters.copy()
+        strategy_constructor_params['data_provider'] = simulation_components["data_provider"]
         strategy_constructor_params['signal_callback'] = engine.handle_signal_event
         strategy_constructor_params['verbose'] = True # Enable strategy internal logging
         
@@ -604,7 +659,7 @@ async def start_simulation(request: StartSimulationRequest):
                  print("BACKEND_API: CRITICAL - RealtimeSimpleMAStrategy class is not available.")
                  raise HTTPException(status_code=500, detail="MA Strategy class not loaded.")
             strategy_instance = RealtimeSimpleMAStrategy(**strategy_constructor_params)
-            print(f"BACKEND_API: {strategy_details.name} (MA) initialized with params: {strategy_constructor_params}. Symbol: {data_provider_symbol}")
+            print(f"BACKEND_API: {selected_strategy_meta.name} (MA) initialized with params: {strategy_constructor_params}. Symbol: {target_symbol}")
         elif request.strategy_id == "realtime_rsi":
             if not RealtimeRSIStrategy:
                  print("BACKEND_API: CRITICAL - RealtimeRSIStrategy class is not available.")
@@ -612,25 +667,25 @@ async def start_simulation(request: StartSimulationRequest):
             # RSI strategy might have different specific parameters than MA
             # We assume strategy_constructor_params contains the correct ones based on STRATEGY_REGISTRY validation by Pydantic
             strategy_instance = RealtimeRSIStrategy(**strategy_constructor_params)
-            print(f"BACKEND_API: {strategy_details.name} (RSI) initialized with params: {strategy_constructor_params}. Symbol: {data_provider_symbol}")
+            print(f"BACKEND_API: {selected_strategy_meta.name} (RSI) initialized with params: {strategy_constructor_params}. Symbol: {target_symbol}")
         else:
             print(f"BACKEND_API: Unknown strategy_id '{request.strategy_id}' for instantiation.")
             raise HTTPException(status_code=500, detail=f"Strategy class for id '{request.strategy_id}' not found or supported for instantiation.")
 
         # Store components and info
-        simulation_components["portfolio"] = portfolio
+        simulation_components["portfolio"] = simulation_components["portfolio"]
         simulation_components["engine"] = engine
-        simulation_components["data_provider"] = data_provider
+        simulation_components["data_provider"] = simulation_components["data_provider"]
         simulation_components["strategy"] = strategy_instance # Use the dynamically created instance
-        simulation_components["strategy_info"] = ApiStrategyInfo(name=strategy_details.name, parameters=strategy_params)
+        simulation_components["strategy_info"] = ApiStrategyInfo(name=selected_strategy_meta.name, parameters=request.parameters)
         
         # 5. Start components
-        data_provider.start()
+        simulation_components["data_provider"].start()
         strategy_instance.start() # Strategy subscribes to provider
         simulation_components["running"] = True
         
-        print(f"BACKEND_API: Simulation started successfully for strategy '{strategy_details.name}' on symbol '{data_provider_symbol}'. Data provider and strategy are active.")
-        return {"message": f"Simulation started for strategy '{strategy_details.name}' with symbol '{data_provider_symbol}'."}
+        print(f"BACKEND_API: Simulation started successfully for strategy '{selected_strategy_meta.name}' on symbol '{target_symbol}'. Data provider and strategy are active.")
+        return {"message": f"Simulation started for strategy '{selected_strategy_meta.name}' with symbol '{target_symbol}'."}
 
     except ValueError as ve:
         print(f"BACKEND_API: ValueError during simulation setup: {ve}")

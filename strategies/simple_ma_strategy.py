@@ -152,18 +152,18 @@ class RealtimeSimpleMAStrategy:
         Callback function to process a new data tick from the provider.
         Updates MAs and generates a new signal if applicable.
         """
-        if data_tick.get('symbol') != self.symbol:
+        if data_tick.symbol != self.symbol:
             return # Not for us
 
-        new_price = data_tick.get('price')
-        current_timestamp = data_tick.get('timestamp', time.time())
+        new_price = data_tick.price
+        current_timestamp = data_tick.timestamp # DataTick namedtuple ensures timestamp exists
 
         if self.verbose:
             print(f"[{time.ctime(current_timestamp)}] {self.symbol} STRATEGY: Received tick. Price: {new_price}, Timestamp: {current_timestamp}")
 
-        if new_price is None:
+        if new_price is None: # Price can be None if data source has issues, though our mock provider always provides one.
             if self.verbose:
-                print(f"[{time.ctime(current_timestamp)}] {self.symbol} STRATEGY: Received tick with no price data: {data_tick}")
+                print(f"[{time.ctime(current_timestamp)}] {self.symbol} STRATEGY: Received tick with no price data (or price was None): {data_tick}")
             return
             
         self.prices.append(float(new_price))

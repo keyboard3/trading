@@ -13,7 +13,6 @@ class RealtimeRSIStrategy:
                  period: int, 
                  oversold_threshold: float, 
                  overbought_threshold: float, 
-                 data_provider: RealtimeDataProviderBase,
                  signal_callback: Callable[[SignalEvent], None],
                  verbose: bool = False):
 
@@ -21,7 +20,6 @@ class RealtimeRSIStrategy:
         self.period = int(period) 
         self.oversold_threshold = float(oversold_threshold)
         self.overbought_threshold = float(overbought_threshold)
-        self.data_provider = data_provider
         self.signal_callback = signal_callback
         self.verbose = verbose
 
@@ -119,17 +117,15 @@ class RealtimeRSIStrategy:
 
     def start(self):
         if self.verbose:
-            print(f"RealtimeRSIStrategy [{self.symbol}] starting and subscribing to data provider.")
+            print(f"RealtimeRSIStrategy [{self.symbol}] starting and preparing for data.")
         self.price_history.clear()
         self.ticks_received = 0
         self.current_rsi = None
         self.previous_rsi = None
-        self.data_provider.subscribe(self.symbol, self.on_new_tick)
 
     def stop(self):
         if self.verbose:
-            print(f"RealtimeRSIStrategy [{self.symbol}] stopping and unsubscribing from data provider.")
-        self.data_provider.unsubscribe(self.symbol, self.on_new_tick)
+            print(f"RealtimeRSIStrategy [{self.symbol}] stopping.")
 
 # Example of how to use it (for testing, not part of the class):
 if __name__ == '__main__':
@@ -151,14 +147,14 @@ if __name__ == '__main__':
         period=5, # Shorter period for faster testing
         oversold_threshold=30,
         overbought_threshold=70,
-        data_provider=mock_provider,
         signal_callback=test_signal_handler,
         verbose=True
     )
 
     # Start
     mock_provider.start() # Start provider first
-    rsi_strategy_realtime.start() # Then strategy subscribes
+    mock_provider.subscribe('TEST_RSI', rsi_strategy_realtime.on_new_tick)
+    rsi_strategy_realtime.start() # Then strategy just resets its state
 
     try:
         print("Running for a few seconds to observe signals...")
@@ -171,5 +167,6 @@ if __name__ == '__main__':
     finally:
         # Stop
         rsi_strategy_realtime.stop()
+        mock_provider.unsubscribe('TEST_RSI', rsi_strategy_realtime.on_new_tick)
         mock_provider.stop()
         print("--- RealtimeRSIStrategy Test Finished ---") 

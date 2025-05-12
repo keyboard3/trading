@@ -660,7 +660,7 @@ async def start_simulation(request: StartSimulationRequest):
             if RealtimeRSIStrategy is None: raise ImportError("RealtimeRSIStrategy not loaded.")
             simulation_components["strategy"] = RealtimeRSIStrategy(
                 symbol=strategy_symbol_param,
-                rsi_period=request.parameters.get("rsi_period", 14), # Corrected param name from 'period' to 'rsi_period' if RSI strategy expects that
+                period=request.parameters.get("period", 14), # Corrected: 'rsi_period' to 'period'
                 overbought_threshold=request.parameters.get("overbought_threshold", 70),
                 oversold_threshold=request.parameters.get("oversold_threshold", 30),
                 signal_callback=simulation_components["engine"].handle_signal_event,

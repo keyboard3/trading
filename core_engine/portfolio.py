@@ -1,5 +1,13 @@
 import time # Added import for time module
 from typing import Dict, Any, Optional, Callable, List, Tuple
+import collections
+import json # Added for serialization
+
+# Define the structure for holding information using a namedtuple
+HoldingInfo = collections.namedtuple('HoldingInfo', ['quantity', 'average_cost_price'])
+
+# Define the structure for trade records (as a type alias for Dict for clarity)
+# TradeRecord = Dict[str, Any]
 
 class MockPortfolio:
     """
@@ -278,6 +286,56 @@ class MockPortfolio:
                     print(f"MockPortfolio: Warning - Current price for {symbol} not available for asset allocation. It will be excluded.")
         return allocation
 
+    # --- New method for persistence --- 
+    def to_dict(self) -> Dict[str, Any]:
+        """将投资组合状态序列化为字典，以便保存。"""
+        # Convert HoldingInfo namedtuples in holdings to simple dicts
+        serializable_holdings = {
+            symbol: {
+                'quantity': info['quantity'],
+                'average_cost_price': info['average_cost_price']
+            }
+            for symbol, info in self.holdings.items()
+        }
+        
+        state = {
+            'cash': self.cash,
+            'holdings': serializable_holdings, # Use the serializable version
+            'realized_pnl': self.realized_pnl,
+            'peak_portfolio_value': self.peak_portfolio_value,
+            'verbose': self.verbose # Optional: save config too
+        }
+        return state
+
+    @classmethod
+    def from_dict(cls, state: Dict[str, Any]) -> 'MockPortfolio':
+        """从字典状态恢复投资组合实例。"""
+        portfolio = cls(initial_cash=state.get('cash', 100000.0), 
+                        verbose=state.get('verbose', False))
+        
+        portfolio.cash = state.get('cash', portfolio.cash)
+        portfolio.realized_pnl = state.get('realized_pnl', 0.0)
+        portfolio.peak_portfolio_value = state.get('peak_portfolio_value', portfolio.cash) # Initial peak can be current cash upon loading
+        
+        # Convert holdings dict back to HoldingInfo namedtuples
+        loaded_holdings = state.get('holdings', {})
+        portfolio.holdings = {
+            symbol: {
+                'quantity': info['quantity'],
+                'average_cost_price': info['average_cost_price']
+            }
+            for symbol, info in loaded_holdings.items()
+        }
+        
+        # Basic validation after loading (optional)
+        if portfolio.cash < 0 and portfolio.verbose:
+            print(f"Warning: Portfolio loaded with negative cash: {portfolio.cash:.2f}")
+            
+        if portfolio.verbose:
+            print(f"MockPortfolio restored from state. Cash: {portfolio.cash:.2f}, Holdings: {list(portfolio.holdings.keys())}")
+            
+        return portfolio
+
 if __name__ == '__main__':
     # Example Usage for MockPortfolio
     print("\n--- MockPortfolio Test ---")
@@ -383,5 +441,25 @@ if __name__ == '__main__':
     print(f"Unrealized P&L: {portfolio.get_unrealized_pnl(get_mock_current_prices):.2f}") # Should be 0
     print("\nAsset Allocation (no holdings):")
     print(portfolio.get_asset_allocation_percentages(get_mock_current_prices))
+
+    # 2. Serialize the portfolio state
+    portfolio_state_dict = portfolio.to_dict()
+    print("\n--- Serialized State (dict) ---")
+    print(json.dumps(portfolio_state_dict, indent=4)) # Pretty print JSON representation
+
+    # 3. Restore the portfolio from the serialized state
+    restored_portfolio = MockPortfolio.from_dict(portfolio_state_dict)
+    print("\n--- Restored Portfolio State ---")
+    print(f"Cash: {restored_portfolio.get_cash():.2f}")
+    print(f"Holdings: {restored_portfolio.get_holdings()}")
+    print(f"Realized PnL: {restored_portfolio.get_realized_pnl():.2f}")
+    print(f"Total Portfolio Value: {restored_portfolio.get_total_portfolio_value(get_mock_current_prices):.2f}")
+
+    # 4. Verify states match
+    assert abs(portfolio.get_cash() - restored_portfolio.get_cash()) < 1e-9
+    assert portfolio.get_holdings() == restored_portfolio.get_holdings()
+    assert abs(portfolio.get_realized_pnl() - restored_portfolio.get_realized_pnl()) < 1e-9
+    assert portfolio.peak_portfolio_value == restored_portfolio.peak_portfolio_value
+    print("\nVerification successful: Original and restored states match.")
 
     print("\n--- End MockPortfolio Test ---") 

@@ -1,4 +1,9 @@
-import type { SimulationStatusResponse, AvailableStrategy, StartSimulationPayload, BackendResponseMessage } from './types';
+import type {
+  SimulationStatusResponse,
+  AvailableStrategy,
+  StartSimulationRequest,
+  // BackendResponseMessage, // This type doesn't exist, use { message: string } inline or create it
+} from './types';
 
 const API_BASE_URL = 'http://localhost:8089'; // Assuming backend runs on port 8089
 
@@ -51,9 +56,9 @@ export async function fetchAvailableStrategies(): Promise<AvailableStrategy[]> {
   }
 }
 
-export async function startSimulation(payload: StartSimulationPayload): Promise<BackendResponseMessage> {
+export async function startSimulation(payload: StartSimulationRequest): Promise<{ message: string }> {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/simulation/start`, {
+    const response = await fetch(`${API_BASE_URL}/simulation/start`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -69,14 +74,14 @@ export async function startSimulation(payload: StartSimulationPayload): Promise<
         const errorMessage = responseData?.detail || responseData?.message || `HTTP error! status: ${response.status}`;
         throw new Error(errorMessage);
     }
-    return responseData as BackendResponseMessage;
+    return responseData as { message: string };
   } catch (error) {
     console.error("Failed to start simulation:", error);
     throw error;
   }
 }
 
-export async function stopSimulation(): Promise<BackendResponseMessage> {
+export async function stopSimulation(): Promise<{ message: string }> {
   try {
     const response = await fetch(`${API_BASE_URL}/api/simulation/stop`, {
       method: 'POST',
@@ -88,9 +93,26 @@ export async function stopSimulation(): Promise<BackendResponseMessage> {
         const errorMessage = responseData?.detail || responseData?.message || `HTTP error! status: ${response.status}`;
         throw new Error(errorMessage);
     }
-    return responseData as BackendResponseMessage;
+    return responseData as { message: string };
   } catch (error) {
     console.error("Failed to stop simulation:", error);
+    throw error;
+  }
+}
+
+// New function to resume simulation
+export async function resumeSimulation(): Promise<{ message: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/simulation/resume`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Unknown error resuming simulation' }));
+      throw new Error(`Failed to resume simulation: ${response.status} ${response.statusText} - ${errorData.detail}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Error resuming simulation:', error);
     throw error;
   }
 } 

@@ -1,5 +1,6 @@
 import time
 from typing import List, Dict, Any, Callable, Optional
+import json # Added for serialization
 
 from .portfolio import MockPortfolio # Assuming MockPortfolio is in portfolio.py in the same directory
 from .realtime_feed_base import RealtimeDataProviderBase # Correct: Base class is here
@@ -219,6 +220,69 @@ class MockTradingEngine:
     
     def get_active_risk_alerts(self) -> List[RiskAlert]: # New method to get alerts
         return self.active_risk_alerts.copy() # Return a copy
+        
+    # --- New methods for persistence --- 
+    def to_dict(self) -> Dict[str, Any]:
+        """将交易引擎的状态序列化为字典。"""
+        # Convert RiskAlert namedtuples to dicts
+        serializable_alerts = [
+            {
+                'alert_type': alert.alert_type,
+                'symbol': alert.symbol,
+                'message': alert.message,
+                'timestamp': alert.timestamp
+            }
+            for alert in self.active_risk_alerts
+        ]
+        
+        state = {
+            # Note: We don't serialize the portfolio or callback directly.
+            # They need to be provided when restoring.
+            'fixed_trade_quantity': self.fixed_trade_quantity,
+            'risk_parameters': self.risk_parameters, # Already a dict
+            'active_risk_alerts': serializable_alerts,
+            '_trade_id_counter': self._trade_id_counter,
+            'verbose': self.verbose
+        }
+        return state
+        
+    @classmethod
+    def from_dict(cls, 
+                  state: Dict[str, Any], 
+                  portfolio: MockPortfolio, # Required for instantiation
+                  current_price_provider_callback: Optional[Callable[[str], Optional[float]]] # Required
+                  ) -> 'MockTradingEngine':
+        """从字典状态恢复交易引擎实例。"""
+        engine = cls(
+            portfolio=portfolio,
+            fixed_trade_quantity=state.get('fixed_trade_quantity', 100),
+            risk_parameters=state.get('risk_parameters'), # Assumes risk_parameters exist in state
+            current_price_provider_callback=current_price_provider_callback,
+            verbose=state.get('verbose', False)
+        )
+        
+        # Restore internal state
+        engine._trade_id_counter = state.get('_trade_id_counter', 0)
+        
+        # Restore active risk alerts (convert dicts back to RiskAlert namedtuples)
+        loaded_alerts = state.get('active_risk_alerts', [])
+        engine.active_risk_alerts = [
+            RiskAlert(
+                alert_type=alert_dict.get('alert_type', 'UNKNOWN'),
+                symbol=alert_dict.get('symbol'),
+                message=alert_dict.get('message', 'Restored alert'),
+                timestamp=alert_dict.get('timestamp', time.time())
+            )
+            for alert_dict in loaded_alerts
+        ]
+        # Engine also has a trade_log, but it seems redundant with portfolio's log.
+        # If engine needs its own independent log restored:
+        # engine.trade_log = state.get('trade_log', []) 
+        
+        if engine.verbose:
+            print(f"{LogColors.OKCYAN}MockTradingEngine restored from state. Trade Counter: {engine._trade_id_counter}, Risk Alerts: {len(engine.active_risk_alerts)}{LogColors.ENDC}")
+            
+        return engine
 
 
 if __name__ == '__main__':
@@ -347,3 +411,50 @@ if __name__ == '__main__':
     print(f"{LogColors.WARNING}Final Active Risk Alerts: {engine.get_active_risk_alerts()}{LogColors.ENDC}")
 
     print(f"{LogColors.HEADER}\n--- MockTradingEngine Test Finished ---{LogColors.ENDC}") 
+
+    print(f"{LogColors.HEADER}\n--- Testing Persistence for Trading Engine ---{LogColors.ENDC}")
+
+    # 1. Simulate some activity that generates state (e.g., alerts, trades)
+    signal_buy_aapl = {'symbol': 'AAPL', 'timestamp': time.time(), 'signal': 'BUY', 'price': 145.0}
+    signal_buy_msft = {'symbol': 'MSFT', 'timestamp': time.time()+1, 'signal': 'BUY', 'price': 270.0}
+    signal_sell_aapl_loss = {'symbol': 'AAPL', 'timestamp': time.time()+2, 'signal': 'SELL', 'price': 135.0} # Likely triggers stop-loss alert
+
+    engine.handle_signal_event(signal_buy_aapl)
+    engine.handle_signal_event(signal_buy_msft)
+    mock_market_prices['AAPL'] = 135.0 # Update mock price to trigger stop loss on sell
+    engine.handle_signal_event(signal_sell_aapl_loss)
+    
+    print("\n--- Original Engine State ---")
+    print(f"Trade Counter: {engine._trade_id_counter}")
+    print(f"Active Risk Alerts: {engine.get_active_risk_alerts()}")
+    print(f"Risk Parameters: {engine.risk_parameters}")
+
+    # 2. Serialize the engine state
+    engine_state_dict = engine.to_dict()
+    print("\n--- Serialized Engine State (dict) ---")
+    print(json.dumps(engine_state_dict, indent=4)) # Pretty print JSON representation
+
+    # 3. Restore the engine from the serialized state
+    # Note: Need the portfolio and callback again for restoration
+    restored_engine = MockTradingEngine.from_dict(
+        engine_state_dict, 
+        portfolio, # Pass the same portfolio instance used for the original engine state
+        mock_price_provider # Pass the callback
+    )
+    print("\n--- Restored Engine State ---")
+    print(f"Trade Counter: {restored_engine._trade_id_counter}")
+    print(f"Active Risk Alerts: {restored_engine.get_active_risk_alerts()}")
+    print(f"Risk Parameters: {restored_engine.risk_parameters}")
+
+    # 4. Verify states match
+    assert engine._trade_id_counter == restored_engine._trade_id_counter
+    # Compare alert content (converting namedtuples to comparable dicts if needed, or compare namedtuples directly)
+    assert engine.get_active_risk_alerts() == restored_engine.get_active_risk_alerts()
+    assert engine.risk_parameters == restored_engine.risk_parameters 
+    assert engine.fixed_trade_quantity == restored_engine.fixed_trade_quantity # Check config restored
+    print("\nVerification successful: Original and restored engine states match.")
+
+    print(f"\n--- Continuing Original Risk Logic Test from __main__ ---{LogColors.ENDC}")
+    # (The rest of the assert statements from the original __main__ block follow here)
+    # Example: Asserting specific alerts were triggered in the original engine run
+    # ... asserts ... 

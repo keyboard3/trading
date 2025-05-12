@@ -19,6 +19,9 @@ export interface HoldingStatus {
   current_price?: number | null; // Allow null to align with backend Pydantic Optional[float]
   market_value?: number | null;
   unrealized_pnl?: number | null;
+  is_simulation_running: boolean;
+  risk_alerts: ApiRiskAlert[] | null;
+  run_id: string | null;
 }
 
 // Corresponds to backend Pydantic model: PortfolioStatusResponse
@@ -66,6 +69,7 @@ export interface SimulationStatusResponse {
   active_strategy?: ApiStrategyInfo | null;
   is_simulation_running: boolean;
   risk_alerts?: ApiRiskAlert[] | null; // Add risk_alerts field
+  run_id: string | null;
 }
 
 // For displaying available strategies from /api/simulation/available_strategies

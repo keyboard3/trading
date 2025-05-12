@@ -130,6 +130,57 @@ sequenceDiagram
     前端->>用户: 显示成功消息，UI更新模拟状态 (例如，禁用控制按钮，触发status轮询)
 ```
 
+## 模拟状态持久化与恢复架构
+
+为了支持长时间模拟和意外中断后的恢复，系统实现了模拟状态的持久化与恢复机制。
+
+**核心概念**:
+- **可恢复状态**: 主要指 `MockPortfolio` 和 `MockTradingEngine` 的内部状态（如持仓、现金、交易记录、累计盈亏、风险跟踪状态等）。
+- **瞬态组件**: `MockRealtimeDataProvider` 和策略实例 (`RealtimeSimpleMAStrategy`, `RealtimeRSIStrategy`) 被视为瞬态，因为它们依赖于运行时的连接和回调，通常在恢复时需要根据已保存的配置重新创建。
+- **运行ID (`run_id`)**: 每个模拟会话（无论是新启动还是恢复的）都有一个唯一的UUID，用于标识其状态文件和区分不同的运行实例。
+
+**后端实现 (`backend/main_api.py`, `core_engine/*`)**:
+
+1.  **序列化**:
+    - `MockPortfolio` 和 `MockTradingEngine` 实现了 `to_dict()` 方法，将其关键内部状态导出为Python字典。
+2.  **持久化**:
+    - **保存内容**: 包括 `portfolio_state`, `engine_state`, `run_id`, `strategy_info` (包含策略名称和参数) 以及时间戳。
+    - **保存时机**:
+        - 后台任务 (`_periodic_save_task`) 定期 (e.g., 每60秒) 将当前 `simulation_components` 中的状态异步保存。
+        - 调用 `POST /api/simulation/stop` 时，会停止数据提供者和策略，标记 `running=False`，并触发最后一次状态保存。
+        - FastAPI 应用正常关闭 (`shutdown` 事件) 时，会尝试进行最后一次保存（如果正在运行）。
+    - **保存位置**: `results/simulation_runs/<run_id>/simulation_state.json`。
+3.  **状态加载**:
+    - FastAPI 应用启动时 (`startup_event`)，会调用 `find_latest_simulation_state_file()` 查找最新的有效状态文件。
+    - 如果找到，读取JSON文件，使用 `MockPortfolio.from_dict()` 和 `MockTradingEngine.from_dict()` 反序列化状态，并将其加载到全局 `simulation_components` 中。
+    - **关键**: 加载后的状态 `running` 标志被设为 `False`，需要用户显式通过 `/api/simulation/resume` 恢复运行。数据提供者和策略实例此时为 `None`。
+4.  **API 端点**:
+    - `GET /api/simulation/status`: 返回当前模拟状态，包括 `run_id`, `is_simulation_running`, 以及 `portfolio_status`, `active_strategy` 等。如果存在可恢复的状态（`run_id` 非空且 `is_simulation_running` 为 `False`），前端可以据此判断显示"恢复模拟"选项。
+    - `POST /api/simulation/start`: **启动全新模拟**。此操作会先调用 `stop_current_simulation(clear_all_components=True)` 清除所有现有状态（包括已加载的可恢复状态），然后生成新的 `run_id`，创建全新的 `portfolio`, `engine`, `data_provider`, `strategy` 实例，并启动模拟。
+    - `POST /api/simulation/stop`: **暂停当前模拟**。停止数据提供者和策略，取消后台保存任务，执行最终保存。保留 `portfolio`, `engine`, `run_id`, `strategy_info`。
+    - `POST /api/simulation/resume`: **恢复已暂停的模拟**。基于 `simulation_components` 中已加载或已暂停的 `portfolio`, `engine`, `run_id`, `strategy_info`：
+        - 重新创建 `data_provider` 和 `strategy` 实例（根据 `strategy_info`）。
+        - 重新连接回调（策略订阅数据，引擎设置价格回调）。
+        - 启动 `data_provider` 和新的后台保存任务。
+        - 设置 `running = True`。
+
+**前端实现 (`frontend/src/*`)**:
+
+1.  **状态管理 (`App.tsx`)**:
+    - `App.tsx` 作为顶层组件，负责定期轮询 `GET /api/simulation/status` 获取最新状态。
+    - 它维护 `simulationStatus`, `isLoading`, `error`, `isResuming` 等状态，并将其传递给子组件。
+2.  **恢复逻辑**:
+    - `App.tsx` 根据从API获取的状态判断是否可以恢复 (`status?.run_id && !status?.is_simulation_running`)。
+    - 如果可以恢复，在左侧控制面板区域显示一个包含 "恢复上次模拟" 按钮的卡片 (`ResumeSimulationCard` - 逻辑现在在App.tsx中处理，UI可能不同)。
+    - 点击按钮调用 `handleResumeSimulation` 函数，该函数发送 `POST /api/simulation/resume` 请求，并处理加载和错误状态。
+3.  **启动与停止**:
+    - `StrategyControlPanel` 组件负责收集策略选择和参数。
+    - 其 "启动模拟" 按钮调用 `handleStartSimulation` (传递给它的prop)，该函数发送 `POST /api/simulation/start` 请求。
+    - "停止模拟" 按钮调用 `handleStopSimulation`，发送 `POST /api/simulation/stop` 请求。
+    - 相关按钮和输入会根据 `isRunning`, `isResuming` 等状态禁用，防止误操作。
+4.  **展示 (`SimulationDisplay` 等)**:
+    - `SimulationDisplay` 及其子组件 (`PortfolioSummary`, `HoldingsTable`等) 接收来自 `App.tsx` 的 `initialStatus` (或类似prop)，纯粹负责根据传入的数据渲染UI，不再进行API调用或状态管理。
+
 ## 未来开发的关键设计原则
 
 *   **模块化**: 尽可能保持组件解耦 (例如，数据提供者、策略、投资组合)。

@@ -10,13 +10,45 @@ import shutil
 import datetime
 import uuid
 import time # Added for simulation
+import asyncio # Added for periodic saving task
+import json # Added for saving state
 # import threading # Not directly needed for now as provider manages its own thread
 
-# --- Import from main.py ---
+# --- Import LogColors ---
+# Moved this block higher to ensure LogColors is defined regardless of other import issues
+import sys
+# Assuming logger_utils is in the same backend directory
+try:
+    from .logger_utils import LogColors # Use relative import if in the same package
+except ImportError:
+    # Fallback if relative import fails (e.g., running script directly)
+    try:
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        from backend.logger_utils import LogColors
+    except ImportError:
+        print("CRITICAL: Could not import LogColors from backend.logger_utils. Colored logs will be disabled in main_api.")
+        # Define fallback class if import fails completely
+        class LogColors:
+            HEADER = ''
+            OKBLUE = ''
+            OKCYAN = ''
+            OKGREEN = ''
+            WARNING = ''
+            FAIL = ''
+            ENDC = ''
+            BOLD = ''
+            UNDERLINE = ''
+
+# --- Import from main.py & core_engine ---
 # Ensure main.py is in PYTHONPATH or adjust path accordingly if needed.
 # Assuming main.py is in the parent directory for now, adjust if structure is different
-import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), '..')) # Add parent dir to sys.path
+# --- This sys.path modification might be redundant if LogColors import worked, but keep for core imports ---
+project_root_for_core = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root_for_core not in sys.path:
+     sys.path.append(project_root_for_core) # Add parent dir to sys.path
+
 try:
     from main import (
         execute_single_backtest_run, 
@@ -82,6 +114,11 @@ app.add_middleware(
 API_RUNS_SUBDIR_NAME = "api_runs" # Subdirectory within MAIN_RESULTS_DIR for API specific runs
 API_RESULTS_MOUNT_PATH = f"/{API_RUNS_SUBDIR_NAME}" # Web path to access these results
 
+# --- Constants for Persistence ---
+SIMULATION_RUNS_BASE_DIR = "results/simulation_runs" # Base directory for all simulation runs
+SIMULATION_STATE_FILENAME = "simulation_state.json"
+SAVE_INTERVAL_SECONDS = 60 # Save state every 60 seconds
+
 # --- Global Simulation State Variables ---
 # Refactored Global Simulation State
 simulation_components: Dict[str, Any] = {
@@ -90,7 +127,9 @@ simulation_components: Dict[str, Any] = {
     "data_provider": None,
     "strategy": None,
     "strategy_info": None, # Will store an ApiStrategyInfo instance
-    "running": False
+    "running": False,
+    "run_id": None, # Added to store the unique ID for the current run
+    "save_task": None # Added to store the background save task
 }
 # Lock for thread-safe access to simulation state if needed later
 # simulation_lock = threading.Lock()
@@ -147,6 +186,7 @@ class SimulationStatusResponse(BaseModel):
     active_strategy: Optional[ApiStrategyInfo] = None 
     is_simulation_running: bool # New field to clearly indicate if any simulation is running
     risk_alerts: Optional[List[ApiRiskAlert]] = None # New field for risk alerts
+    run_id: Optional[str] = None # Added field to indicate if a resumable run exists
 
 # --- New Pydantic Models for Strategy Switching ---
 class StrategyParameterSpec(BaseModel):
@@ -209,11 +249,87 @@ if RealtimeRSIStrategy is not None: # Add RSI strategy to registry
 
 # Add more strategies here as they are developed
 
+# --- Helper function to save simulation state --- 
+async def save_simulation_state(run_id: Optional[str]):
+    if not run_id:
+        print(f"{LogColors.WARNING}BACKEND_API: save_simulation_state called without run_id. Skipping.{LogColors.ENDC}")
+        return
+
+    global simulation_components
+    portfolio = simulation_components.get("portfolio")
+    engine = simulation_components.get("engine")
+
+    if not portfolio or not engine:
+        print(f"{LogColors.WARNING}BACKEND_API: Portfolio or Engine not available for saving state (Run ID: {run_id}). Skipping.{LogColors.ENDC}")
+        return
+
+    try:
+        portfolio_state = portfolio.to_dict()
+        engine_state = engine.to_dict()
+        
+        combined_state = {
+            "run_id": run_id,
+            "timestamp": time.time(),
+            "portfolio_state": portfolio_state,
+            "engine_state": engine_state,
+            # Optionally add strategy info if needed for restore
+            "strategy_info": simulation_components.get("strategy_info").dict() if simulation_components.get("strategy_info") else None
+        }
+        
+        save_dir = os.path.join(SIMULATION_RUNS_BASE_DIR, run_id)
+        os.makedirs(save_dir, exist_ok=True) # Ensure directory exists
+        save_path = os.path.join(save_dir, SIMULATION_STATE_FILENAME)
+        
+        # Use async file writing if possible, or run sync write in thread executor
+        # For simplicity here, using standard sync write (might block briefly)
+        with open(save_path, 'w') as f:
+            json.dump(combined_state, f, indent=4)
+            
+        if simulation_components.get("engine", {}).verbose: # Check if engine exists and is verbose
+             print(f"{LogColors.OKGREEN}BACKEND_API: Simulation state saved successfully to {save_path}{LogColors.ENDC}")
+            
+    except Exception as e:
+        print(f"{LogColors.FAIL}BACKEND_API: Error saving simulation state for run_id {run_id}: {e}{LogColors.ENDC}")
+
+# --- Background Task for Periodic Saving --- 
+async def _periodic_save_task(run_id: str):
+    while True:
+        try:
+            # Check if simulation is still supposed to be running for this run_id
+            if not simulation_components["running"] or simulation_components.get("run_id") != run_id:
+                print(f"{LogColors.OKBLUE}BACKEND_API: Periodic save task for run_id {run_id} stopping as simulation is no longer active or run_id changed.{LogColors.ENDC}")
+                break # Exit the loop
+            
+            await save_simulation_state(run_id)
+            await asyncio.sleep(SAVE_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            print(f"{LogColors.OKBLUE}BACKEND_API: Periodic save task for run_id {run_id} cancelled.{LogColors.ENDC}")
+            break # Exit loop on cancellation
+        except Exception as e:
+            print(f"{LogColors.FAIL}BACKEND_API: Error in periodic save task for run_id {run_id}: {e}. Task will attempt to continue.{LogColors.ENDC}")
+            # Decide whether to break or continue after error
+            await asyncio.sleep(SAVE_INTERVAL_SECONDS) # Wait before retrying/continuing
+
+
 # --- Helper function to stop current simulation ---
 def stop_current_simulation(clear_all_components: bool = False):
     global simulation_components
+    current_run_id = simulation_components.get("run_id")
+    
+    # --- Cancel existing save task --- 
+    save_task = simulation_components.get("save_task")
+    if save_task and not save_task.done():
+        print(f"{LogColors.OKBLUE}BACKEND_API: Cancelling periodic save task for run_id {current_run_id}...{LogColors.ENDC}")
+        save_task.cancel()
+        # We might want to await briefly here, but cancellation should be enough
+        # try:
+        #     await asyncio.wait_for(save_task, timeout=1.0) 
+        # except (asyncio.CancelledError, asyncio.TimeoutError):
+        #     pass
+        simulation_components["save_task"] = None # Clear the task reference
+        
     if simulation_components["running"] or clear_all_components:
-        print(f"BACKEND_API: stop_current_simulation called. clear_all_components={clear_all_components}")
+        print(f"BACKEND_API: stop_current_simulation called. clear_all_components={clear_all_components}, run_id={current_run_id}")
         
         active_strategy = simulation_components.get("strategy")
         if active_strategy:
@@ -222,7 +338,7 @@ def stop_current_simulation(clear_all_components: bool = False):
                 active_strategy.stop()
             except Exception as e:
                 print(f"BACKEND_API: Error stopping strategy: {e}")
-            if clear_all_components: # Only clear if explicitly told to
+            if clear_all_components: 
                 simulation_components["strategy"] = None
 
         active_data_provider = simulation_components.get("data_provider")
@@ -232,20 +348,41 @@ def stop_current_simulation(clear_all_components: bool = False):
                 active_data_provider.stop()
             except Exception as e:
                 print(f"BACKEND_API: Error stopping data provider: {e}")
-            if clear_all_components: # Only clear if explicitly told to
+            if clear_all_components: 
                 simulation_components["data_provider"] = None
+
+        # --- Perform Final Save before clearing (if not clearing all) ---
+        was_running = simulation_components["running"] # Check status before changing it
+        simulation_components["running"] = False # Mark as not running *before* final save for consistency
+        print("BACKEND_API: Simulation marked as not running.")
+
+        if was_running and not clear_all_components and current_run_id: # Save only if it was running and we are not clearing everything
+            print(f"{LogColors.OKBLUE}BACKEND_API: Performing final state save for run_id {current_run_id}...{LogColors.ENDC}")
+            # Need to run async save in a way sync function can call
+            # Simplest might be to run it in the event loop if available
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                     # Schedule it and let it run, don't wait necessarily
+                     loop.create_task(save_simulation_state(current_run_id))
+                else:
+                     # Fallback for shutdown scenario maybe? Or just log.
+                     print(f"{LogColors.WARNING}BACKEND_API: Event loop not running, cannot schedule final async save for {current_run_id}.{LogColors.ENDC}")
+            except Exception as e_save:
+                 print(f"{LogColors.FAIL}BACKEND_API: Error scheduling final save for {current_run_id}: {e_save}{LogColors.ENDC}")
         
         if clear_all_components:
             print("BACKEND_API: Clearing portfolio, engine, and strategy_info.")
             simulation_components["portfolio"] = None
             simulation_components["engine"] = None
             simulation_components["strategy_info"] = None
+            simulation_components["run_id"] = None # Clear run_id when clearing all
             print("BACKEND_API: All simulation components cleared.")
         else:
-            print("BACKEND_API: Active components (strategy, data_provider) stopped. Portfolio/Engine state retained.")
+            print("BACKEND_API: Active components (strategy, data_provider) stopped. Portfolio/Engine/run_id state retained.")
 
-        simulation_components["running"] = False
-        print("BACKEND_API: Simulation marked as not running.")
+        # We already marked running = False earlier
+        # print("BACKEND_API: Simulation marked as not running.") # Redundant
 
 
 # --- App Startup Event ---
@@ -264,70 +401,105 @@ async def startup_event():
         except OSError as e:
             print(f"Error creating API results directory {api_runs_full_path}: {e}")
     
-    # Mount static files directory for API results
+    # Ensure the simulation runs base directory exists
+    if not os.path.exists(SIMULATION_RUNS_BASE_DIR):
+        try:
+            os.makedirs(SIMULATION_RUNS_BASE_DIR)
+            print(f"Created simulation runs base directory: {SIMULATION_RUNS_BASE_DIR}")
+        except OSError as e:
+            print(f"Error creating simulation runs base directory {SIMULATION_RUNS_BASE_DIR}: {e}")
+    
+    # --- Attempt to restore latest simulation state --- 
+    print(f"{LogColors.OKBLUE}Attempting to restore latest simulation state...{LogColors.ENDC}")
+    try:
+        latest_state_file = find_latest_simulation_state_file(SIMULATION_RUNS_BASE_DIR)
+        if latest_state_file:
+            print(f"Found latest state file: {latest_state_file}")
+            with open(latest_state_file, 'r') as f:
+                state_data = json.load(f)
+                
+            portfolio_state = state_data.get("portfolio_state")
+            engine_state = state_data.get("engine_state")
+            run_id = state_data.get("run_id")
+            strategy_info_dict = state_data.get("strategy_info")
+
+            if portfolio_state and engine_state and run_id:
+                if MockPortfolio is None or MockTradingEngine is None:
+                     print(f"{LogColors.FAIL}Cannot restore state: MockPortfolio or MockTradingEngine not loaded.{LogColors.ENDC}")
+                else:
+                    restored_portfolio = MockPortfolio.from_dict(portfolio_state)
+                    
+                    # Define a safe price callback for the restored engine (no active data provider)
+                    def get_price_callback_for_restored_engine(symbol: str) -> Optional[float]:
+                        # Maybe try to find last known price from portfolio state if needed?
+                        # For now, returning None as provider is inactive.
+                        return None
+                        
+                    restored_engine = MockTradingEngine.from_dict(
+                        engine_state,
+                        restored_portfolio, # Pass the restored portfolio
+                        get_price_callback_for_restored_engine # Pass safe callback
+                    )
+                    
+                    # Restore components into global state
+                    global simulation_components
+                    simulation_components["portfolio"] = restored_portfolio
+                    simulation_components["engine"] = restored_engine
+                    simulation_components["run_id"] = run_id
+                    simulation_components["running"] = False # Restored state is not running
+                    simulation_components["data_provider"] = None # Ensure no stale provider reference
+                    simulation_components["strategy"] = None # Ensure no stale strategy reference
+                    simulation_components["save_task"] = None # Ensure no stale save task
+                    
+                    if strategy_info_dict:
+                        try:
+                            simulation_components["strategy_info"] = ApiStrategyInfo(**strategy_info_dict)
+                        except Exception as e_strat_info:
+                            print(f"{LogColors.WARNING}Could not restore ApiStrategyInfo from state: {e_strat_info}{LogColors.ENDC}")
+                            simulation_components["strategy_info"] = None
+                    else:
+                         simulation_components["strategy_info"] = None
+                         
+                    print(f"{LogColors.OKGREEN}Successfully restored simulation state for run_id: {run_id}{LogColors.ENDC}")
+            else:
+                print(f"{LogColors.WARNING}State file {latest_state_file} is incomplete. Skipping restore.{LogColors.ENDC}")
+        else:
+            print("No previous simulation state file found to restore.")
+            
+    except Exception as e:
+        print(f"{LogColors.FAIL}Error during simulation state restoration: {e}. Starting with fresh state.{LogColors.ENDC}")
+        # Ensure components are cleared if restoration fails mid-way
+        simulation_components = {
+            "portfolio": None, "engine": None, "data_provider": None, 
+            "strategy": None, "strategy_info": None, "running": False, 
+            "run_id": None, "save_task": None
+        }
+
+    # Mount static files directory for API results (after potential state restoration)
     # This allows accessing files like http://localhost:8089/api_runs/<run_id>/report.txt
     app.mount(API_RESULTS_MOUNT_PATH, 
               StaticFiles(directory=api_runs_full_path), 
               name="api_results_static")
     print(f"Static files mounted from '{api_runs_full_path}' at '{API_RESULTS_MOUNT_PATH}'")
 
-    # --- Initialize and Start Global Simulation --- # REMOVED
-    # global simulation_portfolio, simulation_engine, simulation_data_provider, simulation_strategy_A, simulation_running
-    # global simulation_strategy_A_info # Add to globals
-
-    # if not all([MockPortfolio, MockTradingEngine, MockRealtimeDataProvider, RealtimeSimpleMAStrategy]):
-    #     print("CRITICAL: Simulation components not imported correctly. Simulation will not start.")
-    #     return
-
-    # print("Initializing global simulation components...")
-    # sim_initial_cash = 50000.00
-    # sim_fixed_trade_qty = 20 
-
-    # simulation_portfolio = MockPortfolio(initial_cash=sim_initial_cash)
-    # simulation_engine = MockTradingEngine(
-    #     portfolio=simulation_portfolio, 
-    #     fixed_trade_quantity=sim_fixed_trade_qty, 
-    #     verbose=True
-    # )
-    # sim_provider_config = [
-    #     {'symbol': 'SIM_STOCK_A', 'initial_price': 120.0, 'volatility': 0.015, 'interval_seconds': 1.0},
-    #     {'symbol': 'SIM_STOCK_B', 'initial_price': 75.0, 'volatility': 0.025, 'interval_seconds': 1.2}
-    # ]
-    # simulation_data_provider = MockRealtimeDataProvider(symbols_config=sim_provider_config, verbose=False)
-    
-    # sim_strategy_symbol = 'SIM_STOCK_A'
-    # sim_short_window = 6
-    # sim_long_window = 15
-    # simulation_strategy_A = RealtimeSimpleMAStrategy(
-    #     symbol=sim_strategy_symbol,
-    #     short_window=sim_short_window,
-    #     long_window=sim_long_window,
-    #     data_provider=simulation_data_provider,
-    #     verbose=True,
-    #     signal_callback=simulation_engine.handle_signal_event
-    # )
-    # # Store strategy info
-    # simulation_strategy_A_info = ApiStrategyInfo(
-    #     name="RealtimeSimpleMAStrategy",
-    #     parameters={
-    #         "symbol": sim_strategy_symbol,
-    #         "short_window": sim_short_window,
-    #         "long_window": sim_long_window
-    #     }
-    # )
-
-    # print("Starting simulation data provider and strategy...")
-    # simulation_data_provider.start()
-    # simulation_strategy_A.start()
-    # simulation_running = True
-    # print("Global simulation started.")
-    print("Startup complete. Simulation will be started via API call.")
+    print("Startup complete.")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     # global simulation_running, simulation_strategy_A, simulation_data_provider # Old globals
     print("FastAPI application shutdown...")
+    # --- Perform Final Save on Shutdown --- 
+    current_run_id = simulation_components.get("run_id")
+    was_running = simulation_components.get("running", False)
+    if was_running and current_run_id:
+        print(f"{LogColors.OKBLUE}BACKEND_API: Performing final state save during shutdown for run_id {current_run_id}...{LogColors.ENDC}")
+        # Run save synchronously during shutdown if possible, or at least attempt
+        try:
+            await save_simulation_state(current_run_id) # Try awaiting directly
+        except Exception as e_save:
+            print(f"{LogColors.FAIL}BACKEND_API: Error during final save on shutdown for {current_run_id}: {e_save}{LogColors.ENDC}")
+            
     stop_current_simulation(clear_all_components=True) # Clear everything on full shutdown
     # if simulation_running:
     #     print("Stopping global simulation components...")
@@ -455,19 +627,21 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content={"detail": exc.errors()}, # 也可以考虑将错误详情返回给前端
     )
 
-# --- New API Endpoint for Simulation Status ---
+# --- Simulation Status Endpoint --- 
 @app.get("/api/simulation/status", response_model=SimulationStatusResponse)
 async def get_simulation_status():
-    # global simulation_portfolio, simulation_engine, simulation_strategy_A_info, simulation_running
     global simulation_components
+    current_run_id = simulation_components.get("run_id") # Get current run_id
 
-    if not simulation_components.get("portfolio") or not simulation_components.get("engine") or not simulation_components.get("data_provider") :
+    if not simulation_components.get("portfolio") or not simulation_components.get("engine"): # Removed data_provider check here
         # If essential components are not initialized, return a default "not running" or minimal state
         return SimulationStatusResponse(
             portfolio_status=None, 
             recent_trades=[], 
-            active_strategy=simulation_components.get("strategy_info"), # Still show strategy if configured but not running
-            is_simulation_running=False
+            active_strategy=simulation_components.get("strategy_info"), # Still show strategy if configured
+            is_simulation_running=False, # Explicitly false if components missing
+            risk_alerts=None, # No alerts if not running
+            run_id=current_run_id # Return run_id even if portfolio/engine are missing (maybe restore failed partially)
         )
 
     portfolio: MockPortfolio = simulation_components["portfolio"]
@@ -506,7 +680,7 @@ async def get_simulation_status():
         total_pnl=portfolio.get_total_pnl(get_current_price_for_portfolio),
         holdings=pydantic_holdings_list,
         asset_allocation=portfolio.get_asset_allocation_percentages(get_current_price_for_portfolio),
-        is_running=simulation_components.get("running", False)
+        is_running=simulation_components.get("running", False) # Use the running flag from global state
     )
 
     # Get recent trades from engine
@@ -551,8 +725,9 @@ async def get_simulation_status():
         portfolio_status=current_portfolio_status,
         recent_trades=api_trades_list[-20:],  # Return last 20 trades for brevity
         active_strategy=simulation_components.get("strategy_info"),
-        is_simulation_running=simulation_components.get("running", False),
-        risk_alerts=active_risk_alerts_response if active_risk_alerts_response else None
+        is_simulation_running=simulation_components.get("running", False), # Use the running flag
+        risk_alerts=active_risk_alerts_response if active_risk_alerts_response else None,
+        run_id=current_run_id # Include the run_id in the response
     )
 
 # --- New API Endpoints for Simulation Control ---
@@ -564,11 +739,14 @@ async def get_available_strategies():
 
 @app.post("/api/simulation/start", status_code=200)
 async def start_simulation(request: StartSimulationRequest):
-    # global simulation_portfolio, simulation_engine, simulation_data_provider, simulation_strategy, simulation_strategy_info, simulation_running # Old globals
     global simulation_components
 
     if simulation_components["running"]:
         raise HTTPException(status_code=400, detail="A simulation is already running. Please stop it before starting a new one.")
+        
+    # --- Force clear any existing state before starting NEW simulation --- 
+    print(f"{LogColors.OKBLUE}BACKEND_API: Clearing any existing/restored state before starting a new simulation...{LogColors.ENDC}")
+    stop_current_simulation(clear_all_components=True) # Ensure a completely clean slate
 
     if request.strategy_id not in STRATEGY_REGISTRY:
         raise HTTPException(status_code=404, detail=f"Strategy with id '{request.strategy_id}' not found.")
@@ -611,10 +789,30 @@ async def start_simulation(request: StartSimulationRequest):
                 raise HTTPException(status_code=400, detail=f"Unknown risk parameter key: {key}. Allowed keys are 'stop_loss_pct', 'max_pos_pct', 'max_dd_pct'.")
         effective_risk_params.update(request.risk_parameters)
 
+    # --- Generate Run ID and Prepare Save Directory --- 
+    current_run_id = str(uuid.uuid4())
+    simulation_components["run_id"] = current_run_id # Store the run ID
+    save_dir = os.path.join(SIMULATION_RUNS_BASE_DIR, current_run_id)
+    try:
+        os.makedirs(save_dir, exist_ok=True)
+        print(f"{LogColors.OKCYAN}BACKEND_API: Ensured save directory exists: {save_dir}{LogColors.ENDC}")
+    except OSError as e:
+         print(f"{LogColors.FAIL}BACKEND_API: Error creating save directory {save_dir}: {e}{LogColors.ENDC}")
+         # Decide if this is fatal or not. For now, log and continue, saving might fail.
+         # raise HTTPException(status_code=500, detail=f"Could not create simulation save directory: {e}")
 
     # Clean up previous simulation state if any (though "running" check should prevent overlap)
-    stop_current_simulation(clear_all_components=True) # Ensure a clean slate
-
+    # stop_current_simulation(clear_all_components=True) # Ensure a clean slate - Moved below run_id generation
+    # We should clear AFTER generating new run_id but BEFORE creating new components
+    # The running check already prevents starting if running, so explicit stop might be redundant here
+    # Let's ensure components are None before creating new ones
+    simulation_components["portfolio"] = None
+    simulation_components["engine"] = None
+    simulation_components["data_provider"] = None
+    simulation_components["strategy"] = None
+    simulation_components["strategy_info"] = None
+    simulation_components["save_task"] = None
+    
     # Initialize components
     try:
         if MockPortfolio is None or MockTradingEngine is None or MockRealtimeDataProvider is None:
@@ -702,7 +900,15 @@ async def start_simulation(request: StartSimulationRequest):
         simulation_components["data_provider"].start()
         simulation_components["running"] = True
         
-        return {"message": f"Simulation started for strategy '{selected_strategy_meta.name}' with initial capital {effective_initial_capital:.2f} and risk params: {effective_risk_params}"}
+        # --- Start the periodic save task --- 
+        print(f"{LogColors.OKBLUE}BACKEND_API: Starting periodic save task for run_id {current_run_id}...{LogColors.ENDC}")
+        simulation_components["save_task"] = asyncio.create_task(_periodic_save_task(current_run_id))
+        
+        # --- Initial Save --- 
+        print(f"{LogColors.OKBLUE}BACKEND_API: Performing initial state save for run_id {current_run_id}...{LogColors.ENDC}")
+        await save_simulation_state(current_run_id)
+        
+        return {"message": f"Simulation started for strategy '{selected_strategy_meta.name}' with initial capital {effective_initial_capital:.2f} and risk params: {effective_risk_params}. Run ID: {current_run_id}"}
 
     except ImportError as e:
         # Log this error server-side as it's a configuration/system issue
@@ -720,13 +926,162 @@ async def start_simulation(request: StartSimulationRequest):
 
 @app.post("/api/simulation/stop", status_code=200)
 async def stop_simulation_api():
-    """Stops the currently running real-time simulation, retaining portfolio/engine state."""
+    """Stops the currently running real-time simulation, retaining portfolio/engine state.
+       A final state save is performed.
+    """
     global simulation_components
     if not simulation_components["running"]:
         return {"message": "模拟当前未运行."}
     
-    stop_current_simulation(clear_all_components=False) # Standard stop, keeps portfolio/engine
-    return {"message": "模拟已停止。投资组合和交易记录已保留."}
+    # Stop simulation, keeping components, perform final save
+    stop_current_simulation(clear_all_components=False) 
+    return {"message": "模拟已停止。最终状态已保存。投资组合和交易记录已保留."}
+
+@app.post("/api/simulation/resume", status_code=200)
+async def resume_simulation():
+    """Resumes a previously stopped simulation using its saved state."""
+    global simulation_components
+
+    if simulation_components["running"]:
+        raise HTTPException(status_code=400, detail="Simulation is already running.")
+
+    # Check if we have a valid state to resume from
+    portfolio = simulation_components.get("portfolio")
+    engine = simulation_components.get("engine")
+    run_id = simulation_components.get("run_id")
+    strategy_info = simulation_components.get("strategy_info")
+
+    if not all([portfolio, engine, run_id, strategy_info]):
+        raise HTTPException(status_code=400, detail="No valid simulation state found to resume, or state is incomplete.")
+
+    print(f"{LogColors.OKCYAN}BACKEND_API: Attempting to resume simulation for run_id: {run_id}...{LogColors.ENDC}")
+
+    try:
+        # 1. Recreate Data Provider based on restored strategy info
+        #    We need the symbol the strategy was using.
+        #    Assume strategy_info.parameters contains the necessary info (like 'symbol')
+        params = strategy_info.parameters
+        strategy_symbol = params.get("symbol")
+        if not strategy_symbol:
+             raise ValueError("Restored strategy info is missing the required 'symbol' parameter.")
+             
+        # Use default config for provider for now, could refine later
+        # TODO: Consider saving/restoring provider config if it becomes more complex
+        symbols_config_for_provider = [{
+            "symbol": strategy_symbol,
+            "initial_price": engine.current_price_provider_callback(strategy_symbol) or 100.0, # Try to get last price, fallback
+            "volatility": 0.01,
+            "trend": 0.0,
+            "interval_seconds": 1.0 
+        }]
+        
+        if MockRealtimeDataProvider is None:
+             raise ImportError("MockRealtimeDataProvider not loaded.")
+        new_data_provider = MockRealtimeDataProvider(
+            symbols_config=symbols_config_for_provider,
+            verbose=True # Or get from restored state? For now, true.
+        )
+
+        # 2. Recreate Strategy Instance
+        strategy_id = None # Find the ID based on the name or structure of strategy_info
+        # This part is tricky, need a reliable way to map strategy_info back to its class/ID
+        # For now, let's check the name against our registry
+        restored_strategy_name = strategy_info.name
+        for reg_id, reg_meta in STRATEGY_REGISTRY.items():
+            if reg_meta.name == restored_strategy_name:
+                strategy_id = reg_id
+                break
+        if not strategy_id:
+            raise ValueError(f"Could not determine strategy ID for restored strategy name '{restored_strategy_name}'")
+            
+        new_strategy = None
+        if strategy_id == "realtime_simple_ma":
+            if RealtimeSimpleMAStrategy is None: raise ImportError("RealtimeSimpleMAStrategy not loaded.")
+            new_strategy = RealtimeSimpleMAStrategy(
+                # Recreate using restored parameters
+                **params, # Pass all restored params
+                signal_callback=engine.handle_signal_event, # Connect to RESTORED engine
+                verbose=True
+            )
+        elif strategy_id == "realtime_rsi":
+             if RealtimeRSIStrategy is None: raise ImportError("RealtimeRSIStrategy not loaded.")
+             new_strategy = RealtimeRSIStrategy(
+                **params,
+                signal_callback=engine.handle_signal_event, # Connect to RESTORED engine
+                verbose=True
+            )
+        else:
+            raise NotImplementedError(f"Resume logic not implemented for strategy ID: {strategy_id}")
+
+        if new_strategy is None:
+             raise RuntimeError("Failed to recreate strategy instance.")
+
+        # 3. Connect Strategy to Data Provider
+        new_data_provider.subscribe(
+            symbol=strategy_symbol,
+            callback_function=new_strategy.on_new_tick
+        )
+
+        # 4. Update Engine's Price Callback
+        def get_price_for_resumed_engine(symbol: str) -> Optional[float]:
+            return new_data_provider.get_current_price(symbol)
+        engine.current_price_provider_callback = get_price_for_resumed_engine
+        
+        # 5. Update Global State
+        simulation_components["data_provider"] = new_data_provider
+        simulation_components["strategy"] = new_strategy
+        # Keep existing portfolio, engine, run_id, strategy_info
+
+        # 6. Start Data Provider
+        new_data_provider.start()
+        simulation_components["running"] = True
+        
+        # 7. Restart Periodic Save Task (using the existing run_id)
+        print(f"{LogColors.OKBLUE}BACKEND_API: Starting periodic save task for resumed run_id {run_id}...{LogColors.ENDC}")
+        simulation_components["save_task"] = asyncio.create_task(_periodic_save_task(run_id))
+
+        print(f"{LogColors.OKGREEN}Simulation for run_id {run_id} resumed successfully.{LogColors.ENDC}")
+        return {"message": f"Simulation {run_id} resumed successfully."} 
+
+    except (ImportError, ValueError, NotImplementedError, RuntimeError, Exception) as e:
+        print(f"{LogColors.FAIL}BACKEND_API: Error resuming simulation {run_id}: {e}{LogColors.ENDC}")
+        # Attempt to clean up partially created components on error
+        if simulation_components.get("data_provider") != new_data_provider: # Check if new provider was assigned
+             if new_data_provider: new_data_provider.stop()
+        simulation_components["data_provider"] = None
+        simulation_components["strategy"] = None
+        simulation_components["running"] = False
+        # Cancel save task if it was somehow created
+        save_task = simulation_components.get("save_task")
+        if save_task and not save_task.done(): save_task.cancel()
+        simulation_components["save_task"] = None
+        
+        raise HTTPException(status_code=500, detail=f"Failed to resume simulation: {e}")
+
+# Helper function needs to be defined before startup_event uses it
+def find_latest_simulation_state_file(base_dir: str) -> Optional[str]:
+    latest_file = None
+    latest_mtime = 0
+
+    if not os.path.exists(base_dir):
+        return None
+
+    for run_id_dir in os.listdir(base_dir):
+        run_dir_path = os.path.join(base_dir, run_id_dir)
+        if not os.path.isdir(run_dir_path):
+            continue
+
+        state_file_path = os.path.join(run_dir_path, SIMULATION_STATE_FILENAME)
+        if os.path.exists(state_file_path):
+            try:
+                mtime = os.path.getmtime(state_file_path)
+                if mtime > latest_mtime:
+                    latest_mtime = mtime
+                    latest_file = state_file_path
+            except OSError:
+                continue # Ignore files we can't get mtime for
+    
+    return latest_file
 
 if __name__ == "__main__":
     import uvicorn

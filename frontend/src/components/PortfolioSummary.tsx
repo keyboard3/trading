@@ -1,14 +1,16 @@
 import React from 'react';
 import type { PortfolioStatusResponse } from '../types';
+import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 
 interface PortfolioSummaryProps {
-  portfolioStatus?: PortfolioStatusResponse;
-  isActuallyRunning?: boolean;
+  portfolioStatus: PortfolioStatusResponse | null;
   isLoading: boolean;
-  error?: string | null;
+  error: string | null;
 }
 
-const PortfolioSummary: React.FC<PortfolioSummaryProps> = ({ portfolioStatus, isActuallyRunning, isLoading, error }) => {
+const PortfolioSummary: React.FC<PortfolioSummaryProps> = ({ portfolioStatus, isLoading, error }) => {
+  const isActuallyRunning = portfolioStatus?.is_running ?? false;
+
   if (isLoading) {
     return <div className="p-4 bg-gray-700 rounded-lg shadow text-white">投资组合摘要加载中...</div>;
   }
@@ -21,15 +23,22 @@ const PortfolioSummary: React.FC<PortfolioSummaryProps> = ({ portfolioStatus, is
     return <div className="p-4 bg-gray-700 rounded-lg shadow text-white">无投资组合数据。</div>;
   }
 
-  const displayRunningStatus = typeof isActuallyRunning === 'boolean' ? isActuallyRunning : portfolioStatus.is_running;
-
   const formatCurrency = (value: number) => {
     return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
+  const allocationEntries = Object.entries(portfolioStatus.asset_allocation || {});
+
   return (
-    <div className="p-4 bg-gray-800 text-white rounded-lg shadow mb-4">
-      <h3 className="text-xl font-semibold mb-3 text-blue-400">投资组合摘要</h3>
+    <Card className="bg-card text-card-foreground">
+      <CardHeader>
+        <CardTitle className="text-lg">
+          投资组合概览 
+          <span className={`ml-2 text-xs font-normal px-2 py-0.5 rounded-full ${isActuallyRunning ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}`}>
+            {isActuallyRunning ? '运行中' : '已停止'}
+          </span>
+        </CardTitle>
+      </CardHeader>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 text-sm">
         <div>
           <p className="text-gray-400">现金:</p>
@@ -61,26 +70,20 @@ const PortfolioSummary: React.FC<PortfolioSummaryProps> = ({ portfolioStatus, is
             ${formatCurrency(portfolioStatus.total_pnl)}
           </p>
         </div>
-        <div>
-          <p className="text-gray-400">模拟运行中:</p>
-          <p className={`text-lg font-medium ${displayRunningStatus ? 'text-green-400' : 'text-yellow-400'}`}>
-            {displayRunningStatus ? '是' : '否 (已停止)'}
-          </p>
-        </div>
       </div>
-      {Object.keys(portfolioStatus.asset_allocation || {}).length > 0 && (
+      {allocationEntries.length > 0 && (
         <div className="mt-4 pt-3 border-t border-gray-700">
-          <h4 className="text-md font-semibold mb-2 text-blue-300">资产分配 (% 总净值):</h4>
+          <h4 className="text-md font-semibold mb-2 text-gray-600">资产分配 (% 总净值):</h4>
           <ul className="list-disc list-inside text-sm space-y-1">
-            {Object.entries(portfolioStatus.asset_allocation || {}).map(([symbol, percentage]) => (
-              <li key={symbol} className="text-gray-300">
-                <span className="font-medium text-white">{symbol}:</span> {percentage.toFixed(2)}%
+            {allocationEntries.map(([symbol, percentage]) => (
+              <li key={symbol} className="text-gray-700">
+                <span className="font-medium text-gray-900">{symbol}:</span> {percentage.toFixed(2)}%
               </li>
             ))}
           </ul>
         </div>
       )}
-    </div>
+    </Card>
   );
 };
 

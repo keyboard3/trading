@@ -1,17 +1,19 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { fetchAvailableStrategies, startSimulation, stopSimulation } from '../api';
-import type { AvailableStrategy, StrategyParameterSpec, StartSimulationPayload } from '../types';
+import type { AvailableStrategy, StrategyParameterSpec, StartSimulationRequest } from '../types';
 
 interface StrategyControlPanelProps {
-  onSimulationStatusChange: () => void; // Callback to trigger re-fetching global status
-  isSimulationRunningCurrently: boolean;
-  currentStrategyName?: string | null;
+  onSimulationAction: () => void; // Callback after start/stop/resume action
+  isRunning: boolean; // Current simulation running state
+  isResumable: boolean; // Indicates if a resumable state exists
+  currentStrategyName?: string | null; // Optional: Name of current strategy if running/resumed
 }
 
 const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({ 
-  onSimulationStatusChange,
-  isSimulationRunningCurrently,
-  currentStrategyName 
+  onSimulationAction,
+  isRunning,
+  isResumable,
+  currentStrategyName
 }) => {
   const [availableStrategies, setAvailableStrategies] = useState<AvailableStrategy[]>([]);
   const [selectedStrategyId, setSelectedStrategyId] = useState<string>('');
@@ -127,14 +129,13 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
         return;
       }
 
-      const payload: StartSimulationPayload = {
+      const payload: StartSimulationRequest = {
         strategy_id: selectedStrategyId,
         parameters: finalParameters,
         initial_capital: capitalBase, // Send base unit to payload
       };
       const response = await startSimulation(payload);
       setActionMessage(response.message || '模拟已成功启动。');
-      onSimulationStatusChange(); 
     } catch (err) {
       setError(err instanceof Error ? `启动模拟失败: ${err.message}` : String(err));
     }
@@ -148,7 +149,6 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
     try {
       const response = await stopSimulation();
       setActionMessage(response.message || '模拟已成功停止。');
-      onSimulationStatusChange(); 
     } catch (err) {
       setError(err instanceof Error ? `停止模拟失败: ${err.message}` : String(err));
     }
@@ -185,7 +185,7 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
           value={selectedStrategyId}
           className='flex-1 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50'
           onChange={e => setSelectedStrategyId(e.target.value)}
-          disabled={isLoadingStrategies || isSimulationRunningCurrently}
+          disabled={isLoadingStrategies || isRunning || isResumable}
         >
           <option value="" disabled={selectedStrategyId !== ''}>-- 请选择 --</option>
           {availableStrategies.map(strategy => (
@@ -212,7 +212,7 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
                   id={`param-${param.name}`}
                   value={parameters[param.name] === undefined ? '' : parameters[param.name]}
                   onChange={e => handleParameterChange(param.name, e.target.value, param.type)}
-                  disabled={isSimulationRunningCurrently}
+                  disabled={isRunning || isResumable}
                   className="w-full disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50"
                 />
               </div>
@@ -236,7 +236,7 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
               id="initial-capital"
               value={initialCapitalDisplayWan}
               onChange={e => handleInitialCapitalDisplayChange(e.target.value)}
-              disabled={isSimulationRunningCurrently}
+              disabled={isRunning || isResumable}
               className="w-full disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50"
               placeholder="例如: 10"
             />
@@ -250,20 +250,20 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
       <div className="simulation-controls mt-4 space-x-2">
         <button 
           onClick={handleStartSimulation} 
-          disabled={!selectedStrategyId || isLoadingAction || isSimulationRunningCurrently}
+          disabled={!selectedStrategyId || isLoadingAction || isRunning || isResumable}
           className="disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {isLoadingAction && !isSimulationRunningCurrently ? '正在启动...' : '启动模拟'}
+          {isLoadingAction && !isRunning ? '正在启动...' : '启动模拟'}
         </button>
         <button 
           onClick={handleStopSimulation} 
-          disabled={isLoadingAction || !isSimulationRunningCurrently}
+          disabled={isLoadingAction || !isRunning}
           className="disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {isLoadingAction && isSimulationRunningCurrently ? '正在停止...' : '停止模拟'}
+          {isLoadingAction && isRunning ? '正在停止...' : '停止模拟'}
         </button>
       </div>
-      {isSimulationRunningCurrently && currentStrategyName && (
+      {isRunning && currentStrategyName && (
          <p className="text-xs text-gray-400 italic mt-2">当前运行的策略: {currentStrategyName}</p>
       )}
     </div>

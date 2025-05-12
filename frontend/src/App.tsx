@@ -15,6 +15,11 @@ import ResultsDisplay from './components/ResultsDisplay'
 import SimulationDisplay from './components/SimulationDisplay'
 import StrategyControlPanel from './components/StrategyControlPanel' // Import StrategyControlPanel
 import type { SimulationStatusResponse } from './types' // Assuming SimulationStatusResponse is in types.ts
+import { fetchSimulationStatus, resumeSimulation } from './api' // Import fetchSimulationStatus AND resumeSimulation
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"; // Import Card components
+import { Button } from "@/components/ui/button"; // Import Button
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"; // Import Alert components
+import { Terminal } from "lucide-react"; // Import Terminal icon
 
 // Helper function to format date as YYYY-MM-DD
 const formatDate = (date: Date): string => {
@@ -42,6 +47,11 @@ function App() {
   const [isSimulationRunningForControlPanel, setIsSimulationRunningForControlPanel] = useState<boolean>(false);
   const [currentStrategyNameForControlPanel, setCurrentStrategyNameForControlPanel] = useState<string | null>(null);
   const [refreshSimDisplayKey, setRefreshSimDisplayKey] = useState<number>(0);
+  const [simulationStatus, setSimulationStatus] = useState<SimulationStatusResponse | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [isLoadingStatus, setIsLoadingStatus] = useState<boolean>(true);
+  const [isResuming, setIsResuming] = useState<boolean>(false); // State for resume action in App
+  const [resumeError, setResumeError] = useState<string | null>(null); // State for resume error in App
 
   // --- Callbacks for Backtest Form ---
   const handleStrategyChange = useCallback((strategy: Strategy | null) => {
@@ -110,6 +120,71 @@ function App() {
     setRefreshSimDisplayKey(prevKey => prevKey + 1); // Increment key to trigger refresh
   }, []);
 
+  // --- Fetch simulation status periodically --- 
+  useEffect(() => {
+    let isMounted = true;
+    const fetchStatus = async () => {
+      try {
+        const data = await fetchSimulationStatus();
+        if (isMounted) {
+          setSimulationStatus(data);
+          setStatusError(null);
+        }
+      } catch (err: any) {
+        if (isMounted) {
+          setStatusError(err.message || '获取模拟状态失败');
+          setSimulationStatus(null);
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingStatus(false); 
+        }
+      }
+    };
+
+    fetchStatus(); // Initial fetch
+    const intervalId = setInterval(fetchStatus, 5000); // Poll every 5 seconds
+
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+    }; // Cleanup on unmount
+  }, []); // Empty dependency array means run once on mount and cleanup on unmount
+  
+  // --- Handler to manually refresh status after action --- 
+  // This can be passed down to child components if needed
+  const refreshSimulationStatus = async () => {
+      setIsLoadingStatus(true); // Show loading indicator during refresh
+      try {
+        const data = await fetchSimulationStatus();
+        setSimulationStatus(data);
+        setStatusError(null);
+      } catch (err: any) {
+         setStatusError(err.message || '刷新模拟状态失败');
+         setSimulationStatus(null);
+      } finally {
+         setIsLoadingStatus(false);
+      }
+  };
+
+  // --- Handler for the resume action --- 
+  const handleResumeSimulation = async () => {
+      setIsResuming(true);
+      setResumeError(null);
+      try {
+        const result = await resumeSimulation(); // Call API
+        console.log(result.message);
+        // Refresh status immediately after successful resume
+        await refreshSimulationStatus(); 
+      } catch (err: any) {
+        const errorMessage = err.message || '恢复模拟失败';
+        setResumeError(errorMessage);
+        console.error(err);
+      } finally {
+        setIsResuming(false);
+      }
+  };
+
   return (
     <Layout>
       <div className="flex flex-row flex-wrap md:flex-nowrap gap-6">
@@ -175,11 +250,50 @@ function App() {
           )}
 
           {activeTab === 'simulation' && (
-            <StrategyControlPanel 
-              onSimulationStatusChange={handleStrategyActionTrigger} // Renamed from onSimulationStatusChange for clarity
-              isSimulationRunningCurrently={isSimulationRunningForControlPanel}
-              currentStrategyName={currentStrategyNameForControlPanel}
-            />
+            <div className="space-y-4"> {/* Add spacing */} 
+              {/* Conditional Rendering for Resume */} 
+              {simulationStatus?.run_id && !simulationStatus?.is_simulation_running && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>恢复模拟</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    {resumeError && ( // Display resume error here
+                       <Alert variant="destructive" className="mb-4">
+                        <Terminal className="h-4 w-4" />
+                        <AlertTitle>恢复失败</AlertTitle>
+                        <AlertDescription>{resumeError}</AlertDescription>
+                        <Button onClick={() => setResumeError(null)} variant="outline" size="sm" className="mt-2">
+                          清除错误
+                        </Button>
+                      </Alert>
+                    )} 
+                    <p className="text-sm text-muted-foreground">
+                        检测到先前停止的模拟 (Run ID: {simulationStatus.run_id}).
+                    </p>
+                    <Button 
+                        onClick={handleResumeSimulation} 
+                        disabled={isResuming}
+                        className="w-full" // Make button full width
+                    >
+                        {isResuming ? '恢复中...' : '恢复模拟'}
+                    </Button>
+                     <p className="text-xs text-muted-foreground pt-1">
+                        恢复将使用上次状态继续。要开始全新模拟，请使用下方控制面板。
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Strategy Control Panel */} 
+              {/* Render always, but disable parts based on isResumable or isRunning */} 
+              <StrategyControlPanel 
+                onSimulationAction={refreshSimulationStatus} // Pass the refresh handler
+                isRunning={simulationStatus?.is_simulation_running ?? false} // Use status from state
+                isResumable={!!simulationStatus?.run_id && !simulationStatus?.is_simulation_running}
+                currentStrategyName={simulationStatus?.active_strategy?.name}
+              />
+            </div>
           )}
         </div>
 
@@ -215,10 +329,21 @@ function App() {
           )}
 
           {activeTab === 'simulation' && (
-            <SimulationDisplay 
-              key={refreshSimDisplayKey} // Use key to force re-render/refresh if needed
-              onDataRefreshed={handleSimulationDataUpdate} // Prop for SimulationDisplay to pass data up
-            />
+            <div className="mt-4">
+              {isLoadingStatus ? (
+                  <p>加载模拟状态...</p>
+              ) : statusError ? (
+                  <p className="text-red-500">错误: {statusError}</p>
+              ) : simulationStatus ? (
+                  <SimulationDisplay 
+                    key={refreshSimDisplayKey}
+                    initialStatus={simulationStatus}
+                    onStatusUpdate={() => {}}
+                  />
+              ) : (
+                   <p className="text-muted-foreground">无模拟数据。请使用上方控制面板启动。</p>
+              )}
+            </div>
           )}
         </div>
       </div>

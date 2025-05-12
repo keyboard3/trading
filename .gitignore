@@ -71,3 +71,5 @@ coverage.xml
 
 # Ignore all results directory content (temporary strategy outputs)
 results/ 
+
+frontend/node_modules/

@@ -185,7 +185,7 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
           value={selectedStrategyId}
           className='flex-1 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50'
           onChange={e => setSelectedStrategyId(e.target.value)}
-          disabled={isLoadingStrategies || isRunning || isResumable}
+          disabled={isLoadingStrategies || isRunning}
         >
           <option value="" disabled={selectedStrategyId !== ''}>-- 请选择 --</option>
           {availableStrategies.map(strategy => (
@@ -212,7 +212,7 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
                   id={`param-${param.name}`}
                   value={parameters[param.name] === undefined ? '' : parameters[param.name]}
                   onChange={e => handleParameterChange(param.name, e.target.value, param.type)}
-                  disabled={isRunning || isResumable}
+                  disabled={isRunning}
                   className="w-full disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50"
                 />
               </div>
@@ -236,7 +236,7 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
               id="initial-capital"
               value={initialCapitalDisplayWan}
               onChange={e => handleInitialCapitalDisplayChange(e.target.value)}
-              disabled={isRunning || isResumable}
+              disabled={isRunning}
               className="w-full disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50"
               placeholder="例如: 10"
             />
@@ -250,10 +250,10 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
       <div className="simulation-controls mt-4 space-x-2">
         <button 
           onClick={handleStartSimulation} 
-          disabled={!selectedStrategyId || isLoadingAction || isRunning || isResumable}
-          className="disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={isLoadingAction || isRunning || !selectedStrategyId}
+          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-500 disabled:cursor-not-allowed"
         >
-          {isLoadingAction && !isRunning ? '正在启动...' : '启动模拟'}
+          启动模拟
         </button>
         <button 
           onClick={handleStopSimulation} 

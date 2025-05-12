@@ -58,7 +58,7 @@ export async function fetchAvailableStrategies(): Promise<AvailableStrategy[]> {
 
 export async function startSimulation(payload: StartSimulationRequest): Promise<{ message: string }> {
   try {
-    const response = await fetch(`${API_BASE_URL}/simulation/start`, {
+    const response = await fetch(`${API_BASE_URL}/api/simulation/start`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

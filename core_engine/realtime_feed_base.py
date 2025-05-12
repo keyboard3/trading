@@ -44,4 +44,17 @@ class RealtimeDataProviderBase(ABC):
         Stop the data provider.
         This should gracefully shut down connections or data generation.
         """
+        pass
+
+    @abstractmethod
+    def get_current_price(self, symbol: str) -> float | None:
+        """
+        Get the last known price for a specific symbol.
+
+        Args:
+            symbol (str): The trading symbol.
+
+        Returns:
+            Optional[float]: The last known price, or None if not available.
+        """
         pass 

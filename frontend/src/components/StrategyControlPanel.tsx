@@ -27,6 +27,10 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null); // For success/info messages from start/stop
 
+  // Data Provider States
+  const [dataProviderType, setDataProviderType] = useState<'mock' | 'yahoo'>('mock');
+  const [yahooPollingInterval, setYahooPollingInterval] = useState<string>('60'); // Default 60 seconds, as string for input
+
   // Risk Parameters States (User inputs percentages, e.g., 10 for 10%)
   const [stopLossPct, setStopLossPct] = useState<string>('10'); // Default 10%
   const [maxPositionPct, setMaxPositionPct] = useState<string>('25'); // Default 25%
@@ -139,6 +143,18 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
     }
     // --- End of Risk Parameters Validation ---
 
+    // --- Validate Yahoo Polling Interval if applicable ---
+    let pollingIntervalNum: number | undefined = undefined;
+    if (dataProviderType === 'yahoo') {
+      pollingIntervalNum = parseInt(yahooPollingInterval, 10);
+      if (isNaN(pollingIntervalNum) || pollingIntervalNum <= 0) {
+        setError('Yahoo Finance 数据轮询间隔必须是一个正整数（秒）。');
+        setIsLoadingAction(false);
+        return;
+      }
+    }
+    // --- End of Yahoo Polling Interval Validation ---
+
     setIsLoadingAction(true);
     setError(null);
     setActionMessage(null);
@@ -173,7 +189,13 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
         parameters: finalParameters,
         initial_capital: capitalBase, // Send base unit to payload
         risk_parameters: Object.keys(riskParams).length > 0 ? riskParams : undefined, // Add risk_parameters, send undefined if empty
+        data_provider_type: dataProviderType, // Add data provider type
       };
+      
+      if (dataProviderType === 'yahoo' && pollingIntervalNum !== undefined) {
+        payload.yahoo_polling_interval = pollingIntervalNum; // Add polling interval if yahoo
+      }
+
       const response = await startSimulation(payload);
       setActionMessage(response.message || '模拟已成功启动。');
     } catch (err) {
@@ -233,6 +255,39 @@ const StrategyControlPanel: React.FC<StrategyControlPanelProps> = ({
           ))}
         </select>
       </div>
+
+      {/* --- Data Provider Selection --- */}
+      <div className="form-group flex flex-row items-center mt-2">
+        <label htmlFor="data-provider-select" className='mr-2'>数据源:</label>
+        <select
+          id="data-provider-select"
+          value={dataProviderType}
+          className='flex-1 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50'
+          onChange={e => setDataProviderType(e.target.value as 'mock' | 'yahoo')}
+          disabled={isRunning || isLoadingAction}
+        >
+          <option value="mock">内部模拟数据</option>
+          <option value="yahoo">Yahoo Finance (延迟)</option>
+        </select>
+      </div>
+
+      {dataProviderType === 'yahoo' && (
+        <div className="form-group flex flex-row items-center mt-1 ml-4"> {/* Indent slightly */}
+          <label htmlFor="yahoo-interval-input" className='mr-2 text-sm text-gray-400'>轮询间隔 (秒):</label>
+          <input
+            id="yahoo-interval-input"
+            type="number"
+            value={yahooPollingInterval}
+            onChange={e => setYahooPollingInterval(e.target.value)}
+            className='flex-1 text-sm bg-gray-800 border border-gray-600 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50'
+            placeholder="例如: 60"
+            min="1"
+            step="1"
+            disabled={isRunning || isLoadingAction}
+          />
+        </div>
+      )}
+      {/* --- End Data Provider Selection --- */}
 
       {selectedStrategyDetails && (
         <div className="strategy-parameters">

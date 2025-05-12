@@ -64,6 +64,7 @@ try:
     from core_engine.portfolio import MockPortfolio
     from core_engine.trading_engine import MockTradingEngine, SignalEvent, TradeRecord # SignalEvent/TradeRecord for Pydantic models
     from core_engine.realtime_feed import MockRealtimeDataProvider
+    from core_engine.realtime_data_providers import YahooFinanceDataProvider
     from strategies.simple_ma_strategy import RealtimeSimpleMAStrategy
     from strategies.realtime_rsi_strategy import RealtimeRSIStrategy # Add import for RSI strategy
     from core_engine.risk_manager import RiskAlert # Import RiskAlert
@@ -207,6 +208,8 @@ class StartSimulationRequest(BaseModel):
     parameters: Dict[str, Any]
     initial_capital: Optional[float] = Field(None, gt=0, description="Optional initial capital for the simulation (must be > 0 if provided)")
     risk_parameters: Optional[Dict[str, float]] = Field(None, description="Optional risk parameters for the simulation. Keys: 'stop_loss_pct', 'max_pos_pct', 'max_dd_pct'")
+    data_provider_type: Optional[str] = Field("mock", description="Type of data provider: 'mock' or 'yahoo'. Default is 'mock'.")
+    yahoo_polling_interval: Optional[int] = Field(60, gt=0, description="Polling interval in seconds for Yahoo Finance provider (must be > 0).")
 
 
 # --- Strategy Registry ---
@@ -815,92 +818,157 @@ async def start_simulation(request: StartSimulationRequest):
     
     # Initialize components
     try:
-        if MockPortfolio is None or MockTradingEngine is None or MockRealtimeDataProvider is None:
-            raise ImportError("Core simulation components (Portfolio, Engine, DataProvider) are not loaded.")
+        if MockPortfolio is None or MockTradingEngine is None:
+            raise ImportError("Core simulation components (Portfolio, Engine) are not loaded.")
+        # DataProvider import check will be done conditionally below
 
         simulation_components["portfolio"] = MockPortfolio(initial_cash=effective_initial_capital, verbose=True)
         
-        # Get the current price callback for the engine
         def get_price_for_engine(symbol: str) -> Optional[float]:
-            if simulation_components["data_provider"]:
-                return simulation_components["data_provider"].get_current_price(symbol)
+            # Ensure data_provider exists and has the method before calling
+            data_provider = simulation_components.get("data_provider")
+            if data_provider and hasattr(data_provider, 'get_current_price'):
+                return data_provider.get_current_price(symbol)
             return None
 
         simulation_components["engine"] = MockTradingEngine(
             portfolio=simulation_components["portfolio"],
-            risk_parameters=effective_risk_params, # Pass the effective risk parameters
+            risk_parameters=effective_risk_params,
             current_price_provider_callback=get_price_for_engine,
             verbose=True
         )
 
-        # Instantiate the selected strategy
-        strategy_symbol_param = request.parameters.get("symbol", "DEFAULT_SYM") # Default if not specified, though MA requires it
-        symbols_config_for_provider: List[Dict[str, Any]] # Define type for clarity
+        strategy_instance: Any = None # To hold the instantiated strategy
+        # Ensure strategy_symbol_param is taken from validated request parameters
+        strategy_symbol_param = request.parameters.get("symbol")
+        if not strategy_symbol_param:
+            # This should ideally be caught by parameter validation earlier if 'symbol' is always required by strategies
+            raise HTTPException(status_code=400, detail="Strategy parameter 'symbol' is missing.")
+
 
         if selected_strategy_meta.id == "realtime_simple_ma":
             if RealtimeSimpleMAStrategy is None: raise ImportError("RealtimeSimpleMAStrategy not loaded.")
-            simulation_components["strategy"] = RealtimeSimpleMAStrategy(
+            strategy_instance = RealtimeSimpleMAStrategy(
                 symbol=strategy_symbol_param, 
                 short_window=request.parameters.get("short_window", 5),
                 long_window=request.parameters.get("long_window", 10),
                 signal_callback=simulation_components["engine"].handle_signal_event,
                 verbose=True
             )
-            symbols_config_for_provider = [{
-                "symbol": strategy_symbol_param,
-                "initial_price": 100.0,
-                "volatility": 0.01,
-                "trend": 0.0001, # Trend is used by API but not directly by MockRealtimeDataProvider
-                "interval_seconds": 1.0 
-            }]
-
         elif selected_strategy_meta.id == "realtime_rsi":
             if RealtimeRSIStrategy is None: raise ImportError("RealtimeRSIStrategy not loaded.")
-            simulation_components["strategy"] = RealtimeRSIStrategy(
+            strategy_instance = RealtimeRSIStrategy(
                 symbol=strategy_symbol_param,
-                period=request.parameters.get("period", 14), # Corrected: 'rsi_period' to 'period'
+                period=request.parameters.get("period", 14),
                 overbought_threshold=request.parameters.get("overbought_threshold", 70),
                 oversold_threshold=request.parameters.get("oversold_threshold", 30),
                 signal_callback=simulation_components["engine"].handle_signal_event,
                 verbose=True
             )
-            symbols_config_for_provider = [{
-                "symbol": strategy_symbol_param,
-                "initial_price": 100.0,
-                "volatility": 0.02,
-                "trend": -0.00005, # Trend is used by API but not directly by MockRealtimeDataProvider
-                "interval_seconds": 1.0
-            }]
         else:
-            # This case should ideally be caught by `request.strategy_id not in STRATEGY_REGISTRY`
-            # but as a safeguard if registry and implementation diverge:
-            raise HTTPException(status_code=500, detail=f"Strategy '{selected_strategy_meta.id}' is registered but not implemented in start_simulation.")
-
-        if simulation_components["strategy"] is None: # Should not happen if above logic is correct
-             raise HTTPException(status_code=500, detail="Strategy component could not be initialized.")
-
-
-        simulation_components["data_provider"] = MockRealtimeDataProvider(
-            symbols_config=symbols_config_for_provider, # Now correctly a List[SymbolConfig]
-            verbose=True
-        )
-        # Subscribe the strategy's on_new_tick method to the data provider
-        simulation_components["data_provider"].subscribe(
-            symbol=strategy_symbol_param, # Pass the symbol the strategy is configured for
-            callback_function=simulation_components["strategy"].on_new_tick
-        )
+            # This means a strategy is in STRATEGY_REGISTRY but not handled here
+            print(f"{LogColors.FAIL}BACKEND_API: Unhandled strategy ID '{selected_strategy_meta.id}' for instantiation.{LogColors.ENDC}")
+            raise HTTPException(status_code=501, detail=f"Strategy type '{selected_strategy_meta.id}' instantiation is not implemented in the API.")
         
-        # Store strategy info for status API
-        simulation_components["strategy_info"] = ApiStrategyInfo(
-            name=selected_strategy_meta.name,
-            parameters=request.parameters
-        )
+        simulation_components["strategy"] = strategy_instance
+        # Store strategy info for status endpoint
+        simulation_components["strategy_info"] = ApiStrategyInfo(name=selected_strategy_meta.name, parameters=request.parameters)
 
-        # Start the data provider (which runs in its own thread)
-        simulation_components["data_provider"].start()
+
+        # --- Instantiate Data Provider (Mock or Yahoo) ---
+        print(f"{LogColors.OKCYAN}BACKEND_API: Attempting to instantiate data provider of type: '{request.data_provider_type}' for symbol '{strategy_symbol_param}'{LogColors.ENDC}")
+
+        if request.data_provider_type == "yahoo":
+            if YahooFinanceDataProvider is None:
+                print(f"{LogColors.FAIL}BACKEND_API: YahooFinanceDataProvider is None (not imported?).{LogColors.ENDC}")
+                raise ImportError("YahooFinanceDataProvider not loaded. Ensure it is imported correctly.")
+            
+            polling_interval = request.yahoo_polling_interval if request.yahoo_polling_interval is not None else 60
+            print(f"{LogColors.OKBLUE}BACKEND_API: Using YahooFinanceDataProvider for symbol: {strategy_symbol_param} with interval {polling_interval}s{LogColors.ENDC}")
+            
+            simulation_components["data_provider"] = YahooFinanceDataProvider(
+                symbols=[strategy_symbol_param], # Yahoo provider takes a list of symbols
+                polling_interval_seconds=polling_interval,
+                verbose=True # Or make this configurable
+            )
+        elif request.data_provider_type == "mock": # Explicitly check for "mock"
+            if MockRealtimeDataProvider is None:
+                print(f"{LogColors.FAIL}BACKEND_API: MockRealtimeDataProvider is None (not imported?).{LogColors.ENDC}")
+                raise ImportError("MockRealtimeDataProvider not loaded. Ensure it is imported correctly.")
+            print(f"{LogColors.OKBLUE}BACKEND_API: Using MockRealtimeDataProvider for symbol: {strategy_symbol_param}{LogColors.ENDC}")
+            
+            # Configuration for MockRealtimeDataProvider
+            _mock_initial_price = 100.0 # Default initial price
+            _mock_volatility = 0.01    # Default volatility
+            _mock_interval = 1.0       # Default interval for mock ticks
+
+            # Customize mock parameters based on strategy type if desired (example)
+            if selected_strategy_meta.id == "realtime_simple_ma":
+                _mock_volatility = 0.015 
+            elif selected_strategy_meta.id == "realtime_rsi":
+                _mock_volatility = 0.025
+
+            symbols_config_for_mock_provider = [{
+                "symbol": strategy_symbol_param,
+                "initial_price": _mock_initial_price,
+                "volatility": _mock_volatility,
+                "interval_seconds": _mock_interval 
+                # "trend" was in old config, but MockRealtimeDataProvider doesn't use it directly
+            }]
+            simulation_components["data_provider"] = MockRealtimeDataProvider(
+                symbols_config=symbols_config_for_mock_provider,
+                verbose=True # Or make this configurable
+            )
+        else:
+            # Should not happen if Pydantic model has a default and validation
+            print(f"{LogColors.FAIL}BACKEND_API: Unknown data_provider_type: {request.data_provider_type}{LogColors.ENDC}")
+            raise HTTPException(status_code=400, detail=f"Invalid data_provider_type: {request.data_provider_type}. Must be 'mock' or 'yahoo'.")
+
+        # --- Start Components ---
+        current_data_provider = simulation_components.get("data_provider")
+        current_strategy = simulation_components.get("strategy")
+
+        if current_strategy and current_data_provider:
+            # Ensure strategy has 'on_data_tick' and 'symbol' attributes
+            if hasattr(current_strategy, 'on_data_tick') and hasattr(current_strategy, 'symbol'):
+                # Ensure the strategy's symbol matches the data provider's configuration (or is handled by it)
+                # For single-symbol strategies, this should be fine.
+                if current_strategy.symbol == strategy_symbol_param: # Or symbols_list for provider
+                    print(f"{LogColors.OKCYAN}BACKEND_API: Subscribing strategy ({selected_strategy_meta.name} for {current_strategy.symbol}) to data provider.{LogColors.ENDC}")
+                    current_data_provider.subscribe(
+                        current_strategy.symbol, 
+                        current_strategy.on_data_tick 
+                    )
+                else:
+                    print(f"{LogColors.WARNING}BACKEND_API: Strategy symbol '{current_strategy.symbol}' does not match data provider's target symbol '{strategy_symbol_param}'. Subscription might fail or be incorrect.{LogColors.ENDC}")
+                    # Attempt to subscribe anyway, provider might handle it or log warning if symbol not configured
+                    current_data_provider.subscribe(
+                        current_strategy.symbol, 
+                        current_strategy.on_data_tick
+                    )
+            else:
+                missing_attrs = []
+                if not hasattr(current_strategy, 'on_data_tick'): missing_attrs.append("'on_data_tick'")
+                if not hasattr(current_strategy, 'symbol'): missing_attrs.append("'symbol'")
+                print(f"{LogColors.WARNING}BACKEND_API: Strategy ({selected_strategy_meta.name}) is missing attributes: {', '.join(missing_attrs)}. Cannot subscribe.{LogColors.ENDC}")
+        else:
+            if not current_strategy:
+                 print(f"{LogColors.WARNING}BACKEND_API: Strategy component not initialized. Skipping subscription.{LogColors.ENDC}")
+            if not current_data_provider:
+                 print(f"{LogColors.WARNING}BACKEND_API: Data Provider component not initialized. Skipping subscription.{LogColors.ENDC}")
+        
+        if current_data_provider:
+            current_data_provider.start()
+            print(f"{LogColors.OKGREEN}BACKEND_API: Data provider started.{LogColors.ENDC}")
+        else:
+            # This case should ideally be caught by the import errors or instantiation logic above.
+            print(f"{LogColors.FAIL}BACKEND_API: Critical error - Data provider component is None before start attempt.{LogColors.ENDC}")
+            raise HTTPException(status_code=500, detail="Critical error: Data provider component is None after instantiation attempt.")
+
         simulation_components["running"] = True
+        print(f"{LogColors.OKGREEN}BACKEND_API: Simulation '{current_run_id}' for strategy '{selected_strategy_meta.name}' started with {request.data_provider_type} provider.{LogColors.ENDC}")
         
-        # --- Start the periodic save task --- 
+        # Start periodic saving task
         print(f"{LogColors.OKBLUE}BACKEND_API: Starting periodic save task for run_id {current_run_id}...{LogColors.ENDC}")
         simulation_components["save_task"] = asyncio.create_task(_periodic_save_task(current_run_id))
         

@@ -59,6 +59,18 @@ realtime-backtest: check-venv
 
 test: check-venv
 	@echo "Running portfolio manager script (core_engine/portfolio_manager.py) (using $(PYTHON_EXEC))..."
-	$(PYTHON_EXEC) -m core_engine.trading_engine
+	$(PYTHON_EXEC) -m core_engine.realtime_data_providers
 
+enter-venv:
+	@echo "正在进入虚拟环境..."
+	@if [ -d "$(VENV_DIR)" ]; then \
+		. $(VENV_DIR)/bin/activate; \
+		echo "已成功进入虚拟环境。使用 'deactivate' 命令退出。"; \
+		exec $(SHELL); \
+	else \
+		echo "错误：虚拟环境目录 $(VENV_DIR) 不存在。"; \
+		echo "请先创建虚拟环境。"; \
+		exit 1; \
+	fi
+	
 # You can add other commands here, like for running tests, linting, etc. 

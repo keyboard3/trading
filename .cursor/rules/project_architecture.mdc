@@ -20,8 +20,9 @@ alwaysApply: false
 
 1.  **核心引擎 (`core_engine/`)**: 包含数据处理、策略执行、投资组合管理和交易模拟的基础逻辑。
     *   **数据提供者**: 历史和实时数据的抽象及具体实现。
-        *   `RealtimeDataProviderBase` (`core_engine/realtime_feed_base.py`)
-        *   `MockRealtimeDataProvider` (`core_engine/realtime_feed.py`): 其实例化和配置（如模拟的股票代码）现在可以根据所选策略的要求由后端API动态设定。
+        *   `RealtimeDataProviderBase` (`core_engine/realtime_feed_base.py`): 定义了数据提供者的通用接口，新增 `get_current_price(symbol: str)` 抽象方法。
+        *   `MockRealtimeDataProvider` (`core_engine/realtime_feed.py`): 用于生成内部模拟数据的提供者。
+        *   `YahooFinanceDataProvider` (`core_engine/realtime_data_providers.py`): 通过 `yfinance` 库从 Yahoo Finance 获取（延迟的）实时市场报价，支持配置轮询间隔。
         *   (未来: 历史数据接口、其他实时数据源)
     *   **策略**: 基类和具体的策略实现。这些策略可以被后端API根据用户请求动态选择、实例化和配置。
         *   `BaseStrategy` (`strategies/base_strategy.py`)
@@ -40,16 +41,19 @@ alwaysApply: false
     *   **API 端点**:\n        *   `/api/v1/strategies`: 获取可用回测策略列表。\n        *   `/api/v1/backtest/run`: 运行历史回测。
         *   `/api/simulation/status`: (GET) 获取当前实时模拟的详细状态，包括投资组合（含详细盈亏、资产分配）、最近交易、活动策略信息、模拟是否正在运行以及一个当前活动风险告警的列表 (`risk_alerts`)。即使模拟已停止，只要状态未被清除，仍会返回最后的有效状态。
         *   `/api/simulation/available_strategies`: (GET) 提供一个当前后端注册的、可用于实时模拟的策略列表（含策略ID、名称、描述、参数规格）。供前端动态构建策略选择和参数配置界面。
-        *   `/api/simulation/start`: (POST) 根据请求中指定的 `strategy_id`、`parameters` 和可选的 `initial_capital`，初始化并启动一个新的实时模拟会话。启动前会先调用内部逻辑彻底停止并清除任何先前的模拟状态，以确保全新的开始。
+        *   `/api/simulation/start`: (POST) 根据请求中指定的 `strategy_id`、`parameters`、可选的 `initial_capital`、`data_provider_type` ('mock' 或 'yahoo') 以及可选的 `yahoo_polling_interval` (当类型为 'yahoo' 时)，初始化并启动一个新的实时模拟会话。启动前会先调用内部逻辑彻底停止并清除任何先前的模拟状态，以确保全新的开始。
         *   `/api/simulation/stop`: (POST) 停止当前正在运行的实时模拟的核心活动部分（如数据提供者和策略的数据处理循环）。默认情况下，此操作会保留投资组合、交易引擎和策略信息的最终状态，以便用户查看。应用关闭时，会进行彻底的状态清除。
     *   **数据模型**: 用于 API 请求和响应的 Pydantic 模型。例如 `BacktestRequest`, `SimulationStatusResponse`, `AvailableStrategy`, `StartSimulationRequest` 等，确保了清晰的接口定义和数据校验。Pydantic 模型如 `HoldingStatus` 和 `PortfolioStatusResponse` 已更新以包含新的盈亏和资产分配字段。新增了 `ApiRiskAlert` 模型用于表示风险告警。
     *   **全局模拟会话管理**: 后端维护一个全局状态来管理当前的实时模拟会话。这包括：
         *   **策略注册表 (`STRATEGY_REGISTRY`)**: 一个集中的地方，用于注册所有可用于实时模拟的策略（如 `RealtimeSimpleMAStrategy` 和 `RealtimeRSIStrategy`）及其元数据（如参数定义、描述等）。
         *   **动态组件生命周期**: 当收到 `/api/simulation/start` 请求时，后端会：
             1.  根据请求的 `strategy_id` 从策略注册表中查找策略。
-            2.  动态实例化所需的核心引擎组件：`MockPortfolio` (使用请求的或默认的初始资金)，`MockTradingEngine` (关联Portfolio, 并配置风险规则)，特定策略实例 (如 `RealtimeSimpleMAStrategy` 或 `RealtimeRSIStrategy`，传递用户提供的参数)，以及 `MockRealtimeDataProvider` (根据策略参数配置，例如股票代码 `symbol`)。
-            3.  将这些组件关联起来（例如，策略的信号回调连接到交易引擎）。
-            4.  启动数据提供者和策略。
+            2.  动态实例化所需的核心引擎组件：`MockPortfolio` (使用请求的或默认的初始资金)，`MockTradingEngine` (关联Portfolio, 并配置风险规则)，特定策略实例 (如 `RealtimeSimpleMAStrategy` 或 `RealtimeRSIStrategy`，传递用户提供的参数)。
+            3.  根据请求的 `data_provider_type` (默认为 'mock') 实例化相应的数据提供者：
+                *   若为 'mock'，则创建 `MockRealtimeDataProvider` (根据策略参数配置symbol等)。
+                *   若为 'yahoo'，则创建 `YahooFinanceDataProvider` (使用策略参数中的symbol，并使用请求中的 `yahoo_polling_interval`)。
+            4.  将这些组件关联起来（例如，策略的信号回调连接到交易引擎，交易引擎的价格回调连接到数据提供者的 `get_current_price` 方法）。
+            5.  启动数据提供者和策略。
         *   **状态管理与启停**: 通过 `stop_current_simulation(clear_all_components: bool)` 内部函数控制模拟的停止。`clear_all_components=True` (如启动新模拟前或应用关闭时调用) 会完全清除所有组件实例和状态。`clear_all_components=False` (如 `/api/simulation/stop` 端点调用) 则只停止活动组件，保留投资组合等状态以供后续查询。
 
 3.  **前端 UI (`frontend/`)**: 一个 React/Vite 应用程序，用于用户交互、显示结果和控制模拟。
@@ -58,7 +62,7 @@ alwaysApply: false
         *   `src/components/`: 可复用的 UI 组件。
             *   `BacktestForm.tsx`
             *   `BacktestResultDisplay.tsx`
-            *   `StrategyControlPanel.tsx`: 允许用户选择可用策略、配置其参数、设置初始资金，并控制模拟的启动与停止。
+            *   `StrategyControlPanel.tsx`: 允许用户选择可用策略、配置其参数、设置初始资金，选择数据源 (内部模拟或Yahoo Finance) 及相应的轮询间隔，并控制模拟的启动与停止。
             *   `SimulationDisplay.tsx` (及其子组件: `PortfolioSummary`, `HoldingsTable`, `TradesList`, `StrategyInfoDisplay`): 动态显示模拟交易的状态信息。
         *   `src/api.ts`: 用于后端通信的函数，包括 `fetchAvailableStrategies`, `startSimulation`, `stopSimulation`, `fetchSimulationStatus` 等。
         *   `src/types.ts`: TypeScript 类型定义，与后端 Pydantic 模型对应。
@@ -114,15 +118,16 @@ sequenceDiagram
 
     用户->>前端: 选择策略 (例如："实时简单MA" 或 "实时RSI震荡策略")
     用户->>前端: 配置参数 (例如：symbol="MSFT", short_window=5, long_window=10 或 period=14, oversold=30, overbought=70)
+    用户->>前端: 选择数据源 (例如："Yahoo Finance (延迟)", 并设置轮询间隔)
     用户->>前端: 设置初始资金 (例如：10万元)
     用户->>前端: 点击 "启动模拟" 按钮
-    前端->>后端 (FastAPI API): POST /api/simulation/start (payload: {strategy_id, parameters, initial_capital})
+    前端->>后端 (FastAPI API): POST /api/simulation/start (payload: {strategy_id, parameters, initial_capital, data_provider_type, yahoo_polling_interval})
     后端 (FastAPI API)->>后端 (FastAPI API): stop_current_simulation(clear_all_components=True) (停止并清理旧模拟)
     后端 (FastAPI API)->>策略注册表 (STRATEGY_REGISTRY): 查询 strategy_id 定义
     策略注册表 (STRATEGY_REGISTRY)-->>后端 (FastAPI API): 返回策略类和元数据
     后端 (FastAPI API)->>核心引擎 (动态实例化): 创建 MockPortfolio (含初始资金)
     后端 (FastAPI API)->>核心引擎 (动态实例化): 创建 MockTradingEngine (关联Portfolio, 配置风险规则)
-    后端 (FastAPI API)->>核心引擎 (动态实例化): 创建 MockRealtimeDataProvider (根据策略参数配置symbol等)
+    后端 (FastAPI API)->>核心引擎 (动态实例化): 根据 data_provider_type 创建 MockRealtimeDataProvider 或 YahooFinanceDataProvider (配置symbol, 轮询间隔等)
     后端 (FastAPI API)->>核心引擎 (动态实例化): 创建 选定策略实例 (例如 RealtimeSimpleMAStrategy 或 RealtimeRSIStrategy，关联DataProvider，信号回调至Engine)
     后端 (FastAPI API)->>核心引擎 (动态实例化): 调用 DataProvider.start() 和 Strategy.start()
     核心引擎 (动态实例化)-->>后端 (FastAPI API): 组件启动成功

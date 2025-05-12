@@ -94,4 +94,6 @@ export interface StartSimulationRequest {
   parameters: Record<string, any>;
   initial_capital?: number | null;
   risk_parameters?: Record<string, number> | null; // Add risk_parameters for the request
+  data_provider_type?: 'mock' | 'yahoo';
+  yahoo_polling_interval?: number | null;
 } 

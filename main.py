@@ -1,7 +1,7 @@
 # main.py - 主入口脚本
 
 # 导入必要的模块
-from core_engine.data_loader import init_db, load_data_from_db, DB_FILE, OHLCV_TABLE_NAME, import_csv_to_db, DATA_DIR # Added DATA_DIR
+from core_engine.data_loader import init_db, load_data_from_db, DB_FILE, OHLCV_DAILY_TABLE_NAME, OHLCV_MINUTE_TABLE_NAME, import_csv_to_db, DATA_DIR # Updated import
 from core_engine.backtest_engine import run_backtest
 from core_engine.performance_analyzer import (
     calculate_performance_metrics,

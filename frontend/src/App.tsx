@@ -53,6 +53,10 @@ function App() {
   const [isResuming, setIsResuming] = useState<boolean>(false); // State for resume action in App
   const [resumeError, setResumeError] = useState<string | null>(null); // State for resume error in App
 
+  useEffect(() => {
+    console.log("[App.tsx] refreshSimDisplayKey changed to:", refreshSimDisplayKey);
+  }, [refreshSimDisplayKey]);
+
   // --- Callbacks for Backtest Form ---
   const handleStrategyChange = useCallback((strategy: Strategy | null) => {
     setSelectedStrategy(strategy)
@@ -126,6 +130,7 @@ function App() {
     const fetchStatus = async () => {
       try {
         const data = await fetchSimulationStatus();
+        console.log("[App.tsx fetchStatus] Received data:", JSON.stringify(data)); // Log the received data
         if (isMounted) {
           setSimulationStatus(data);
           setStatusError(null);
@@ -152,8 +157,8 @@ function App() {
   }, []); // Empty dependency array means run once on mount and cleanup on unmount
   
   // --- Handler to manually refresh status after action --- 
-  // This can be passed down to child components if needed
   const refreshSimulationStatus = async () => {
+      console.log("[App.tsx] refreshSimulationStatus called."); // Log when called
       setIsLoadingStatus(true); // Show loading indicator during refresh
       try {
         const data = await fetchSimulationStatus();
@@ -330,15 +335,15 @@ function App() {
 
           {activeTab === 'simulation' && (
             <div className="mt-4">
-              {isLoadingStatus ? (
+              {(isLoadingStatus && !simulationStatus) ? (
                   <p>加载模拟状态...</p>
               ) : statusError ? (
                   <p className="text-red-500">错误: {statusError}</p>
               ) : simulationStatus ? (
                   <SimulationDisplay 
-                    key={refreshSimDisplayKey}
+                    // key={refreshSimDisplayKey} // Still commented out
                     initialStatus={simulationStatus}
-                    onStatusUpdate={() => {}}
+                    // isLoading={isLoadingStatus} // Optional: pass to show internal spinner
                   />
               ) : (
                    <p className="text-muted-foreground">无模拟数据。请使用上方控制面板启动。</p>

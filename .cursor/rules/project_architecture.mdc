@@ -36,13 +36,42 @@ alwaysApply: false
     *   **风险管理器 (`RiskManager`)** (`core_engine/risk_manager.py`): 提供一套独立的风险评估函数。包括检查单笔头寸的止损、单个资产的最大持仓规模（占总投资组合的百分比）以及整个账户的最大回撤（相对于历史峰值净值）。定义了 `RiskAlert` 结构来表示风险事件。
     *   **事件/信号系统**: (目前为隐式，如果需要则正式化) 如 `SignalEvent`, `DataTick` 等结构。
 
+    *   **历史K线数据处理 (`core_engine/historical_data_provider.py`)**:
+        *   负责封装从本地数据库 (`market_data.db`) 获取和处理历史K线数据的逻辑，供 `/api/v1/klines/historical` API 使用。
+        *   **数据源与质量**: 采用多表存储策略以保证数据质量：
+            *   `ohlcv_1m_data`: 存储近期的1分钟K线数据，用于高质量的分钟级图表。
+            *   `ohlcv_daily_data`: 存储长期的日线K线数据。
+        *   根据API请求的周期和时间范围，智能选择从分钟表或日线表读取数据，并能基于Pandas进行必要的K线周期重采样。
+
 2.  **后端 API (`backend/`)**: 一个 FastAPI 应用程序，用于暴露核心引擎的功能并为前端提供数据。
     *   **主应用程序**: `backend/main_api.py`
     *   **API 端点**:\n        *   `/api/v1/strategies`: 获取可用回测策略列表。\n        *   `/api/v1/backtest/run`: 运行历史回测。
         *   `/api/simulation/status`: (GET) 获取当前实时模拟的详细状态，包括投资组合（含详细盈亏、资产分配）、最近交易、活动策略信息、模拟是否正在运行以及一个当前活动风险告警的列表 (`risk_alerts`)。即使模拟已停止，只要状态未被清除，仍会返回最后的有效状态。
         *   `/api/simulation/available_strategies`: (GET) 提供一个当前后端注册的、可用于实时模拟的策略列表（含策略ID、名称、描述、参数规格）。供前端动态构建策略选择和参数配置界面。
-        *   `/api/simulation/start`: (POST) 根据请求中指定的 `strategy_id`、`parameters`、可选的 `initial_capital`、`data_provider_type` ('mock' 或 'yahoo') 以及可选的 `yahoo_polling_interval` (当类型为 'yahoo' 时)，初始化并启动一个新的实时模拟会话。启动前会先调用内部逻辑彻底停止并清除任何先前的模拟状态，以确保全新的开始。
+        *   `/api/simulation/start`: (POST) 根据请求中指定的 `strategy_id`、`parameters`、可选的 `initial_capital`、`data_provider_type` (\'mock\' 或 \'yahoo\') 以及可选的 `yahoo_polling_interval` (当类型为 \'yahoo\' 时)，初始化并启动一个新的实时模拟会话。启动前会先调用内部逻辑彻底停止并清除任何先前的模拟状态，以确保全新的开始。
         *   `/api/simulation/stop`: (POST) 停止当前正在运行的实时模拟的核心活动部分（如数据提供者和策略的数据处理循环）。默认情况下，此操作会保留投资组合、交易引擎和策略信息的最终状态，以便用户查看。应用关闭时，会进行彻底的状态清除。
+    *   `/api/v1/klines/historical`: (GET) 提供指定交易对、指定时间周期的历史OHLCV（开高低收成交量）数据。
+        *   **目标**: 为前端K线图表组件提供历史数据支持。
+        *   **请求参数**:
+            *   `symbol: str`: 交易对代码 (例如: "MSFT", "BTC-USD")。 (Query parameter)
+            *   `interval: str`: K线周期。支持: "1d" (日线), "1h" (小时线), "5m" (5分钟线)。 (Query parameter)
+            *   `limit: int = 100`: 返回的数据点数量上限。 (Query parameter, 默认 100)
+            *   `end_time: Optional[str] = None`: K线数据的结束时间点 (ISO格式字符串或UNIX时间戳)。如果未提供，则默认为当前时间。 (Query parameter, 可选)
+            *   `source: Optional[str] = "db_only"`: 数据源标识。目前固定为 `"db_only"`，表示仅从本地数据库获取。 (Query parameter, 可选)
+        *   **响应体 (JSON)**: 数组形式，每个元素代表一条K线数据。
+            ```json
+            [
+              {
+                "time": 1698192000, // K线开始时间的UNIX时间戳 (秒, UTC)
+                "open": 150.00,
+                "high": 152.50,
+                "low": 149.80,
+                "close": 151.30,
+                "volume": 1234567.0
+              }
+              // ...更多K线数据...
+            ]
+            ```
     *   **数据模型**: 用于 API 请求和响应的 Pydantic 模型。例如 `BacktestRequest`, `SimulationStatusResponse`, `AvailableStrategy`, `StartSimulationRequest` 等，确保了清晰的接口定义和数据校验。Pydantic 模型如 `HoldingStatus` 和 `PortfolioStatusResponse` 已更新以包含新的盈亏和资产分配字段。新增了 `ApiRiskAlert` 模型用于表示风险告警。
     *   **全局模拟会话管理**: 后端维护一个全局状态来管理当前的实时模拟会话。这包括：
         *   **策略注册表 (`STRATEGY_REGISTRY`)**: 一个集中的地方，用于注册所有可用于实时模拟的策略（如 `RealtimeSimpleMAStrategy` 和 `RealtimeRSIStrategy`）及其元数据（如参数定义、描述等）。
@@ -64,7 +93,8 @@ alwaysApply: false
             *   `BacktestResultDisplay.tsx`
             *   `StrategyControlPanel.tsx`: 允许用户选择可用策略、配置其参数、设置初始资金，选择数据源 (内部模拟或Yahoo Finance) 及相应的轮询间隔，并控制模拟的启动与停止。
             *   `SimulationDisplay.tsx` (及其子组件: `PortfolioSummary`, `HoldingsTable`, `TradesList`, `StrategyInfoDisplay`): 动态显示模拟交易的状态信息。
-        *   `src/api.ts`: 用于后端通信的函数，包括 `fetchAvailableStrategies`, `startSimulation`, `stopSimulation`, `fetchSimulationStatus` 等。
+            *   `charts/RealtimeChartDisplay.tsx`: 新增的图表组件，负责使用 `lightweight-charts` 库展示指定交易对的历史K线、叠加交易标记，并集成到模拟交易显示界面。
+        *   `src/api.ts`: 用于后端通信的函数，包括 `fetchAvailableStrategies`, `startSimulation`, `stopSimulation`, `fetchSimulationStatus`, `fetchHistoricalKlines` 等。
         *   `src/types.ts`: TypeScript 类型定义，与后端 Pydantic 模型对应。
     *   **状态管理**: 主要通过 React 组件状态 (useState, useEffect) 和 props。管理诸如可用策略列表、当前选定策略、参数值、模拟运行状态、API加载/错误状态等。
     *   **UI 库**: (目前为自定义 CSS 与 Tailwind CSS，如果后续为加快开发速度需要，可考虑组件库)。

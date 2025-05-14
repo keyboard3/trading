@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
@@ -68,6 +68,7 @@ try:
     from strategies.simple_ma_strategy import RealtimeSimpleMAStrategy
     from strategies.realtime_rsi_strategy import RealtimeRSIStrategy # Add import for RSI strategy
     from core_engine.risk_manager import RiskAlert # Import RiskAlert
+    from core_engine.historical_data_provider import fetch_historical_klines_core # <--- ADD THIS IMPORT
 except ImportError as e:
     print(f"Error importing from main.py or core_engine: {e}")
     # Fallbacks (existing + new for simulation components)
@@ -180,6 +181,15 @@ class ApiRiskAlert(BaseModel):
     symbol: Optional[str] = None
     message: str
     timestamp: float
+
+# --- Pydantic Model for K-Line Data ---
+class KLineData(BaseModel):
+    time: int  # UNIX timestamp (seconds, UTC)
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
 
 class SimulationStatusResponse(BaseModel):
     portfolio_status: Optional[PortfolioStatusResponse] = None # Made optional
@@ -1150,6 +1160,40 @@ def find_latest_simulation_state_file(base_dir: str) -> Optional[str]:
                 continue # Ignore files we can't get mtime for
     
     return latest_file
+
+@app.get("/api/v1/klines/historical", response_model=List[KLineData])
+async def get_historical_klines(
+    symbol: str,
+    interval: str = Query(default="1m", description="Interval string e.g., 1m, 5m, 1h, 1d"),
+    limit: int = Query(default=200, gt=0, le=2000, description="Number of kline items to return"),
+    end_time: Optional[int] = Query(None, description="End timestamp in UNIX seconds. If None, current time is used."),
+    source: Optional[str] = Query("db_only", description="Data source preference: e.g., db_only, db_then_yahoo, force_yahoo")
+):
+    if interval not in ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"]:
+        # Add more validation as needed, or rely on core_engine to handle invalid interval string
+        raise HTTPException(status_code=400, detail=f"Invalid interval: {interval}. Supported intervals are 1m, 5m, etc.")
+    
+    try:
+        # Pass the 'source' parameter to the core fetching logic
+        klines = await fetch_historical_klines_core(
+            symbol=symbol, 
+            interval_str=interval, 
+            limit=limit, 
+            end_time_ts=end_time,
+            source_preference=source # Pass it here
+        )
+        if not klines:
+            # Return empty list if no data, or a 404 if preferred
+            # raise HTTPException(status_code=404, detail="No kline data found for the given parameters")
+            return []
+        return [KLineData(**kline) for kline in klines]
+    except ValueError as ve:
+        # Handle specific errors from core_engine if they are custom exceptions
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        # Generic error handler for unexpected issues
+        print(f"[API Error] get_historical_klines failed: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error while fetching kline data")
 
 if __name__ == "__main__":
     import uvicorn

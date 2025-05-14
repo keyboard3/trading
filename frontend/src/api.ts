@@ -3,6 +3,7 @@ import type {
   AvailableStrategy,
   StartSimulationRequest,
   // BackendResponseMessage, // This type doesn't exist, use { message: string } inline or create it
+  KLineData,
 } from './types';
 
 const API_BASE_URL = 'http://localhost:8089'; // Assuming backend runs on port 8089
@@ -114,5 +115,50 @@ export async function resumeSimulation(): Promise<{ message: string }> {
   } catch (error) {
     console.error('Error resuming simulation:', error);
     throw error;
+  }
+}
+
+export async function fetchHistoricalKlines(
+  symbol: string, 
+  interval: string, 
+  limit: number, 
+  endTime?: Date // Optional end time
+): Promise<KLineData[]> {
+  const params = new URLSearchParams({
+    symbol,
+    interval,
+    limit: String(limit),
+  });
+  if (endTime) {
+    // Convert Date to ISO string (UTC). Backend expects UTC or will default to it.
+    // The backend API Query param for end_time is Optional[datetime.datetime].
+    // FastAPI handles parsing ISO string to datetime.
+    params.append('end_time', endTime.toISOString());
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/klines/historical?${params.toString()}`);
+    if (!response.ok) {
+      // Attempt to parse error details from JSON response
+      let errorDetail = `HTTP error! status: ${response.status}`;
+      try {
+        const errorData = await response.json();
+        if (errorData && errorData.detail) {
+          if (typeof errorData.detail === 'string') {
+            errorDetail = errorData.detail;
+          } else if (Array.isArray(errorData.detail)) { // Handle FastAPI validation errors
+            errorDetail = errorData.detail.map((err: any) => `${err.loc?.join('->') || 'error'}: ${err.msg}`).join('; ');
+          }
+        }
+      } catch (e) {
+        // Ignore if error body isn't JSON
+      }
+      throw new Error(errorDetail);
+    }
+    const data: KLineData[] = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch historical klines:", error);
+    throw error; // Re-throw to allow caller handling
   }
 } 

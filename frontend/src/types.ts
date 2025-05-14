@@ -96,4 +96,22 @@ export interface StartSimulationRequest {
   risk_parameters?: Record<string, number> | null; // Add risk_parameters for the request
   data_provider_type?: 'mock' | 'yahoo';
   yahoo_polling_interval?: number | null;
+}
+
+// Corresponds to backend Pydantic model: KLineData
+export interface KLineData {
+  time: number; // UNIX timestamp (seconds)
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+}
+
+export interface TradeMarkerData {
+  timestamp: number; // UNIX UTC seconds timestamp
+  type: 'BUY' | 'SELL'; // Type of trade
+  price: number;       // Price at which the trade occurred
+  quantity: number;    // Quantity traded
+  symbol: string;      // Symbol of the instrument traded
 } 

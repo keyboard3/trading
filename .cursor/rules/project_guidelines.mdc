@@ -97,6 +97,7 @@ alwaysApply: false
     *   `[README.md](mdc:README.md)`: 跟踪项目的总体阶段和高级别成就。包括示例输出（控制台片段、CSV结构、报告片段和指向*示例*图表文件的Markdown图片链接）。
     *   `docs/*.md`: 包含特定概念的详细解释 (例如 `[rsi_strategy_explained.md](mdc:docs/rsi_strategy_explained.md)`）。
     *   `[docs/rsi_strategy_explained.md](mdc:docs/rsi_strategy_explained.md)` 包含看涨/看跌背离示例的**占位符Markdown图片链接** (例如 `![看涨背离示例图](mdc:images/rsi_bullish_divergence_example.png ...)`）。需要创建实际图片并将其放置在 `docs/images/` 中才能呈现这些图片。
+    *   **同步更新关键设计文档**: 在引入重要的新功能、API接口、主要UI组件或对核心架构（如数据库模式）进行显著修改后，应及时更新 `project_architecture.mdc` 和 `project_overview.mdc` 等相关高级设计文档，以确保其准确反映项目当前状态。
 *   **错误处理**: 数据库操作中的 `UNIQUE constraint failed` 错误通过 `[data_loader.py](mdc:core_engine/data_loader.py)` 和 `[data_fetcher.py](mdc:core_engine/data_fetcher.py)` 中的"先删除后插入"逻辑处理。
 
 此规则应为未来的交互提供良好的概览。

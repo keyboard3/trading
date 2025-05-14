@@ -6,6 +6,8 @@ import TradesList from './TradesList';
 import StrategyInfoDisplay from './StrategyInfoDisplay';
 import RiskAlertsDisplay from './RiskAlertsDisplay';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import RealtimeChartDisplay from './charts/RealtimeChartDisplay';
+import type { TradeMarkerData } from '../types';
 
 const POLLING_INTERVAL_MS = 3000; // Poll every 3 seconds, was 5
 
@@ -15,6 +17,13 @@ interface SimulationDisplayProps {
 
 const SimulationDisplay: React.FC<SimulationDisplayProps> = ({ initialStatus }) => {
   const status = initialStatus;
+  
+  useEffect(() => {
+    console.log("[SimulationDisplay MOUNTED/UPDATED] Key: (from parent if passed), Props initialStatus changed or component mounted/updated. Current symbol:", status?.active_strategy?.parameters?.symbol);
+    return () => {
+      console.log("[SimulationDisplay UNMOUNTED] Current symbol before unmount:", status?.active_strategy?.parameters?.symbol);
+    };
+  }, [initialStatus]); // Assuming initialStatus is the main prop driving its content
   
   // --- Render Main Status Display --- 
   const renderStatusDetails = () => {
@@ -43,8 +52,32 @@ const SimulationDisplay: React.FC<SimulationDisplayProps> = ({ initialStatus }) 
       }
       
       // We have portfolio status, render the details
+      // Prioritize symbol from active strategy, then fallback to trades/holdings if necessary
+      const chartSymbol = status.active_strategy?.parameters?.symbol || 
+                        status.recent_trades?.[0]?.symbol || 
+                        status.portfolio_status?.holdings?.[0]?.symbol;
+      const chartInterval = "5m"; // Default interval
+
       return (
          <div className="space-y-4"> {/* Outer container for spacing between top and bottom */}
+            {/* --- Realtime Chart --- */}
+            {chartSymbol && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle>实时K线图: {chartSymbol} ({chartInterval})</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <RealtimeChartDisplay 
+                            symbol={chartSymbol} 
+                            interval={chartInterval} 
+                            trades={status.recent_trades} // Pass all recent trades
+                            runId={status.run_id} // Pass the run_id
+                            // latestTick can be connected later if needed for sub-minute updates
+                        />
+                    </CardContent>
+                </Card>
+            )}
+
             {/* --- Top Row: Summary & Strategy/Risk --- */}
             {/* Change grid to 3 columns on medium screens, left takes 2, right takes 1 */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4"> 

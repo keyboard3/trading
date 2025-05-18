@@ -3,6 +3,8 @@ import sqlite3
 import os
 from datetime import datetime
 from typing import Optional
+import yfinance as yf # Import yfinance
+import argparse # Import argparse
 
 # --- 数据库配置 ---
 DATA_DIR = "data"
@@ -337,45 +339,207 @@ def import_csv_to_db(csv_file_path: str, table_name: str = OHLCV_DAILY_TABLE_NAM
     else:
         print(f"未能从 {csv_file_path} 加载数据，导入数据库中止。")
 
-if __name__ == '__main__':
-    print("--- data_loader.py 模块测试 ---")
-    # 1. 初始化数据库 (会在项目根目录的 data/market_data.db 创建)
-    init_db()
+def _delete_all_data_for_symbol(symbol: str, table_name: str, db_path: str = DB_FILE):
+    """内部辅助函数，删除指定表中特定symbol的所有数据。"""
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        sql_delete = f"DELETE FROM {table_name} WHERE symbol = ?"
+        cursor.execute(sql_delete, (symbol,))
+        conn.commit()
+        deleted_rows = cursor.rowcount
+        if deleted_rows > 0:
+            print(f"成功从表 '{table_name}' 中删除了 {deleted_rows} 条关于 '{symbol}' 的旧数据。")
+        else:
+            print(f"在表 '{table_name}' 中没有找到关于 '{symbol}' 的旧数据可供删除。")
+    except sqlite3.Error as e:
+        print(f"从数据库表 '{table_name}' 删除 '{symbol}' 的所有数据时发生错误: {e}")
+    finally:
+        if conn:
+            conn.close()
 
-    # 2. 测试导入 sample_stock_data.csv 到数据库
-    sample_csv_file = os.path.join(DATA_DIR, 'sample_stock_data.csv') 
-    # 确保 sample_stock_data.csv 在 data 目录下，如果不是，需要调整路径或复制文件
-    # 为了测试，我们假设它在 data 目录下
-    if not os.path.exists(sample_csv_file):
-        print(f"警告: 示例CSV文件 {sample_csv_file} 不存在，无法执行导入测试。请确保该文件存在于 {DATA_DIR} 目录中。")
-    else:
-        print(f"\n--- 测试CSV导入 ({sample_csv_file}) ---")
-        import_csv_to_db(sample_csv_file)
-
-    # 3. 测试从数据库加载所有数据
-    print("\n--- 测试从数据库加载所有数据 ---")
-    all_db_data = load_data_from_db()
-    if not all_db_data.empty:
-        all_db_data.info()
-        print(all_db_data.head())
-
-    # 4. 测试按条件从数据库加载数据
-    print("\n--- 测试从数据库加载特定股票和日期范围数据 ---")
-    # 假设 sample_stock_data.csv 包含 STOCK_A 和日期 '2023-01-01' 至 '2023-01-03'
-    # 注意：日期字符串格式应与数据库中存储的timestamp格式兼容进行比较
-    # pd.to_datetime能处理多种格式，SQLite中通常是 'YYYY-MM-DD HH:MM:SS'
-    stock_a_data = load_data_from_db(symbols=['STOCK_A'], start_date='2023-01-01', end_date='2023-01-03')
-    if not stock_a_data.empty:
-        print("\nSTOCK_A 数据 (2023-01-01 to 2023-01-03):")
-        print(stock_a_data)
-    else:
-        print("未找到 STOCK_A 在指定日期范围的数据。可能是CSV中无此数据或导入问题。")
+def download_and_store_single_stock(
+    symbol_to_download: str, 
+    yf_period: str = "max", 
+    yf_interval: str = "1d", 
+    target_table_name: str = OHLCV_DAILY_TABLE_NAME,
+    db_path: str = DB_FILE
+):
+    """
+    从 yfinance 下载指定股票的数据，进行预处理，然后删除旧数据并存入数据库。
+    """
+    print(f"开始下载股票 {symbol_to_download} 的数据 (period: {yf_period}, interval: {yf_interval})...")
     
-    stock_b_data = load_data_from_db(symbols=['STOCK_B'])
-    if not stock_b_data.empty:
-        print("\nSTOCK_B 全部数据:")
-        print(stock_b_data)
-    else:
-        print("未找到 STOCK_B 的数据。")
+    try:
+        ticker = yf.Ticker(symbol_to_download)
+        # auto_adjust=True (默认) 会返回调整后的OHLC，actions=False (默认) 不会单独返回分红和拆股事件
+        df = ticker.history(period=yf_period, interval=yf_interval, auto_adjust=True, actions=False)
+    except Exception as e:
+        print(f"从 yfinance 下载 {symbol_to_download} 数据时出错: {e}")
+        return
 
-    print("\n--- data_loader.py 模块测试结束 ---") 
+    if df.empty:
+        print(f"未能从 yfinance 下载到 {symbol_to_download} 的数据 (period: {yf_period}, interval: {yf_interval})。")
+        return
+
+    print(f"成功从 yfinance 下载了 {len(df)} 条 {symbol_to_download} 的原始数据。开始预处理...")
+
+    # 数据预处理
+    df_processed = df.copy()
+    df_processed.reset_index(inplace=True) # 将索引 (通常是 Date 或 Datetime) 变成列
+
+    # 重命名日期列为 'timestamp'
+    date_col_name = df_processed.columns[0] # 通常是 'Date' 或 'Datetime'
+    df_processed.rename(columns={date_col_name: 'timestamp'}, inplace=True)
+    
+    # 转换 'timestamp' 列为 datetime 对象并确保UTC (yfinance索引通常已经是datetime但可能需明确tz)
+    # pd.to_datetime(df_processed['timestamp'])
+    # 如果已经是 timezone-aware，保留；如果是 naive，本地化到UTC (yfinance 通常返回tz-aware的UTC时间)
+    if df_processed['timestamp'].dt.tz is None:
+         df_processed['timestamp'] = df_processed['timestamp'].dt.tz_localize('UTC')
+    else:
+         df_processed['timestamp'] = df_processed['timestamp'].dt.tz_convert('UTC')
+
+
+    df_processed['symbol'] = symbol_to_download
+
+    # 将列名转换为小写
+    df_processed.columns = [col.lower() for col in df_processed.columns]
+    
+    # 选取并重排我们需要的列 (确保 volume 列存在，如果yfinance没返回就填充0)
+    if 'volume' not in df_processed.columns:
+        df_processed['volume'] = 0
+        
+    required_db_cols = ['timestamp', 'symbol', 'open', 'high', 'low', 'close', 'volume']
+    # 检查是否存在所有必需列，防止因yfinance返回数据结构变化导致错误
+    missing_cols = [col for col in required_db_cols if col not in df_processed.columns]
+    if missing_cols:
+        print(f"错误: 从yfinance获取的数据经处理后缺少以下列: {missing_cols}。无法保存。")
+        return
+        
+    df_to_save = df_processed[required_db_cols]
+
+    print(f"数据预处理完成。准备删除旧数据并保存 {len(df_to_save)} 条新数据到表 '{target_table_name}'...")
+
+    _delete_all_data_for_symbol(symbol_to_download, target_table_name, db_path)
+    save_df_to_db(df_to_save, target_table_name, db_path)
+    print(f"股票 {symbol_to_download} 的数据已成功下载并存储到表 '{target_table_name}'。")
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="数据库和数据加载工具 (core_engine.data_loader)")
+    
+    # 添加 action 参数，用于区分不同的操作
+    parser.add_argument(
+        '--action', 
+        type=str, 
+        required=True, 
+        choices=['init_db', 'download_stock'], 
+        help="要执行的操作: 'init_db' (初始化数据库表), 'download_stock' (下载并存储单只股票的历史数据)"
+    )
+    
+    # 参数用于 'download_stock' action
+    parser.add_argument(
+        '--symbol', 
+        type=str, 
+        help="要下载的股票代码 (例如 '002594.SZ', 'MSFT'). 'download_stock' action必需."
+    )
+    parser.add_argument(
+        '--period', 
+        type=str, 
+        default="max", 
+        help="yfinance的period参数 (例如 '1y', '5y', 'max'). 默认为 'max'."
+    )
+    parser.add_argument(
+        '--interval', 
+        type=str, 
+        default="1d", 
+        help="yfinance的interval参数 (例如 '1d', '1wk', '1m', '5m'). 默认为 '1d'."
+    )
+    parser.add_argument(
+        '--table', 
+        type=str, 
+        default=OHLCV_DAILY_TABLE_NAME, 
+        help=f"目标数据库表名. 默认为 '{OHLCV_DAILY_TABLE_NAME}'. "
+             f"可选: '{OHLCV_MINUTE_TABLE_NAME}' (用于分钟线)."
+    )
+    parser.add_argument(
+        '--db_path',
+        type=str,
+        default=DB_FILE,
+        help=f"数据库文件路径. 默认为 '{DB_FILE}'."
+    )
+
+    args = parser.parse_args()
+
+    if args.action == 'init_db':
+        print("执行数据库初始化...")
+        init_db(args.db_path)
+        print("数据库初始化完成。")
+    elif args.action == 'download_stock':
+        if not args.symbol:
+            parser.error("--action 'download_stock' 要求必须提供 --symbol 参数。")
+        
+        print(f"准备下载股票: {args.symbol}")
+        print(f"  Period: {args.period}")
+        print(f"  Interval: {args.interval}")
+        print(f"  Target Table: {args.table}")
+        print(f"  Database: {args.db_path}")
+        
+        download_and_store_single_stock(
+            symbol_to_download=args.symbol,
+            yf_period=args.period,
+            yf_interval=args.interval,
+            target_table_name=args.table,
+            db_path=args.db_path
+        )
+    else:
+        print(f"未知的action: {args.action}")
+        parser.print_help()
+
+# 示例:
+# python -m core_engine.data_loader --action init_db
+# python -m core_engine.data_loader --action download_stock --symbol 002594.SZ --period max --interval 1d --table ohlcv_daily_data
+# python -m core_engine.data_loader --action download_stock --symbol MSFT --period 1y --interval 1d
+# python -m core_engine.data_loader --action download_stock --symbol BTC-USD --period 7d --interval 1m --table ohlcv_1m_data
+
+# 1. 初始化数据库 (会在项目根目录的 data/market_data.db 创建)
+# init_db()
+
+# 2. 测试导入 sample_stock_data.csv 到数据库
+# sample_csv_file = os.path.join(DATA_DIR, 'sample_stock_data.csv') 
+# 确保 sample_stock_data.csv 在 data 目录下，如果不是，需要调整路径或复制文件
+# 为了测试，我们假设它在 data 目录下
+# if not os.path.exists(sample_csv_file):
+#     print(f"警告: 示例CSV文件 {sample_csv_file} 不存在，无法执行导入测试。请确保该文件存在于 {DATA_DIR} 目录中。")
+# else:
+#     print(f"\n--- 测试CSV导入 ({sample_csv_file}) ---")
+#     import_csv_to_db(sample_csv_file)
+
+# 3. 测试从数据库加载所有数据
+# print("\n--- 测试从数据库加载所有数据 ---")
+# all_db_data = load_data_from_db()
+# if not all_db_data.empty:
+#     all_db_data.info()
+#     print(all_db_data.head())
+
+# 4. 测试按条件从数据库加载数据
+# print("\n--- 测试从数据库加载特定股票和日期范围数据 ---")
+# 假设 sample_stock_data.csv 包含 STOCK_A 和日期 '2023-01-01' 至 '2023-01-03'
+# 注意：日期字符串格式应与数据库中存储的timestamp格式兼容进行比较
+# pd.to_datetime能处理多种格式，SQLite中通常是 'YYYY-MM-DD HH:MM:SS'
+# stock_a_data = load_data_from_db(symbols=['STOCK_A'], start_date='2023-01-01', end_date='2023-01-03')
+# if not stock_a_data.empty:
+#     print("\nSTOCK_A 数据 (2023-01-01 to 2023-01-03):")
+#     print(stock_a_data)
+# else:
+#     print("未找到 STOCK_A 在指定日期范围的数据。可能是CSV中无此数据或导入问题。")
+    
+# stock_b_data = load_data_from_db(symbols=['STOCK_B'])
+# if not stock_b_data.empty:
+#     print("\nSTOCK_B 全部数据:")
+#     print(stock_b_data)
+# else:
+#     print("未找到 STOCK_B 的数据。")
+
+# print("\n--- data_loader.py 模块测试结束 ---") 

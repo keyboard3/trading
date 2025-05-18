@@ -5,7 +5,7 @@ import Layout from './components/Layout'
 import StrategySelector from './components/StrategySelector'
 import type { Strategy } from './components/StrategySelector'
 import ParametersForm from './components/ParametersForm'
-import StockInput from './components/StockInput'
+// import StockInput from './components/StockInput' // Replaced with dropdown
 import DateRangePicker from './components/DateRangePicker'
 import RunBacktestButton from './components/RunBacktestButton'
 import type { BacktestResponse } from './components/RunBacktestButton'
@@ -21,6 +21,16 @@ import { Button } from "@/components/ui/button"; // Import Button
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"; // Import Alert components
 import { Terminal } from "lucide-react"; // Import Terminal icon
 
+// Define stock options
+const STOCK_OPTIONS = [
+  { label: "比亚迪-A股", value: "002594.SZ" },
+  { label: "微软-美股", value: "MSFT" },
+  { label: "苹果-美股", value: "AAPL" },
+  // Add more stocks here as needed
+  // { label: "腾讯控股-港股", value: "0700.HK" },
+  // { label: "贵州茅台-A股", value: "600519.SS" },
+];
+
 // Helper function to format date as YYYY-MM-DD
 const formatDate = (date: Date): string => {
   const year = date.getFullYear();
@@ -33,7 +43,8 @@ function App() {
   // --- Backtest States ---
   const [selectedStrategy, setSelectedStrategy] = useState<Strategy | null>(null)
   const [strategyParameters, setStrategyParameters] = useState<Record<string, any>>({})
-  const [stockSymbolsInput, setStockSymbolsInput] = useState<string>("MSFT")
+  // Initialize with the value of the first stock option
+  const [stockSymbolsInput, setStockSymbolsInput] = useState<string>(STOCK_OPTIONS[0].value) 
   const today = new Date()
   const oneYearAgo = new Date(new Date().setFullYear(today.getFullYear() - 1))
   const [startDate, setStartDate] = useState<string>(formatDate(oneYearAgo))
@@ -75,11 +86,12 @@ function App() {
     setBacktestApiError(null)
   }, [])
 
-  const handleStockSymbolsChange = useCallback((symbols: string) => {
-    setStockSymbolsInput(symbols)
-    setBacktestApiResponse(null)
-    setBacktestApiError(null)
-  }, [])
+  // This callback now handles the value from the select dropdown
+  const handleStockSymbolsChange = useCallback((selectedValue: string) => {
+    setStockSymbolsInput(selectedValue);
+    setBacktestApiResponse(null);
+    setBacktestApiError(null);
+  }, []);
 
   const handleStartDateChange = useCallback((date: string) => {
     setStartDate(date)
@@ -190,6 +202,12 @@ function App() {
       }
   };
 
+  // Helper to get current stock label
+  const getCurrentStockLabel = () => {
+    const selectedOption = STOCK_OPTIONS.find(option => option.value === stockSymbolsInput);
+    return selectedOption ? selectedOption.label : stockSymbolsInput;
+  };
+
   return (
     <Layout>
       <div className="flex flex-row flex-wrap md:flex-nowrap gap-6">
@@ -201,10 +219,24 @@ function App() {
                 selectedStrategyId={selectedStrategy?.id || null} 
                 onStrategySelect={handleStrategyChange} 
               />
-              <StockInput 
-                stockSymbols={stockSymbolsInput}
-                onStockSymbolsChange={handleStockSymbolsChange}
-              />
+              {/* Replace StockInput with a Select dropdown */}
+              <div className="mt-0"> {/* Adjusted margin top */}
+                <label htmlFor="stock-select" className="block text-sm font-medium text-gray-700 mb-1">
+                  选择股票:
+                </label>
+                <select
+                  id="stock-select"
+                  value={stockSymbolsInput}
+                  onChange={(e) => handleStockSymbolsChange(e.target.value)}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                >
+                  {STOCK_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label} ({option.value})
+                    </option>
+                  ))}
+                </select>
+              </div>
               <DateRangePicker
                 startDate={startDate}
                 endDate={endDate}
@@ -229,7 +261,7 @@ function App() {
               </div>
               <div className="my-2 p-3 bg-gray-50 rounded text-xs space-y-1">
                 <div><span className="font-semibold">日期范围:</span> {startDate} 至 {endDate}</div>
-                {stockSymbolsInput && <div><span className="font-semibold">当前代码:</span> {stockSymbolsInput}</div>}
+                {stockSymbolsInput && <div><span className="font-semibold">当前选股:</span> {getCurrentStockLabel()} ({stockSymbolsInput})</div>}
               </div>
               {selectedStrategy && (
                 <div className="p-3 bg-indigo-50 rounded border border-indigo-200">
@@ -244,7 +276,7 @@ function App() {
               />
               <RunBacktestButton
                 strategyId={selectedStrategy?.id || null}
-                stockSymbols={stockSymbolsInput}
+                stockSymbols={stockSymbolsInput} // This remains as a string
                 startDate={startDate}
                 endDate={endDate}
                 parameters={strategyParameters}

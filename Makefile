@@ -51,11 +51,7 @@ fetch-data: check-venv
 
 fetch-historical-data: check-venv
 	@echo "Running data loading script (core_engine/data_loader.py) (using $(PYTHON_EXEC))..."
-	$(PYTHON_EXEC) -m core_engine.data_loader
-
-init-db-load-csv: check-venv
-	@echo "Running data loading script (core_engine/data_loader.py) (using $(PYTHON_EXEC))..."
-	$(PYTHON_EXEC) -m core_engine.data_loader
+	$(PYTHON_EXEC) -m core_engine.data_loader --action init_db
 
 realtime-backtest: check-venv
 	@echo "Running realtime backtesting script (core_engine/realtime_backtest.py) (using $(PYTHON_EXEC))..."

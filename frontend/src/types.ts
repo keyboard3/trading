@@ -68,8 +68,9 @@ export interface SimulationStatusResponse {
   recent_trades: ApiTradeRecord[];
   active_strategy?: ApiStrategyInfo | null;
   is_simulation_running: boolean;
-  risk_alerts?: ApiRiskAlert[] | null; // Add risk_alerts field
+  risk_alerts?: ApiRiskAlert[] | null;
   run_id: string | null;
+  current_kline_for_chart?: KLineData | null;
 }
 
 // For displaying available strategies from /api/simulation/available_strategies

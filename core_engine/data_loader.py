@@ -117,10 +117,11 @@ def save_df_to_db(df: pd.DataFrame, table_name: str, db_path=DB_FILE, if_exists=
 
     except sqlite3.IntegrityError as e:
         # 这通常是由于违反了 PRIMARY KEY (timestamp, symbol) 的唯一性约束
-        print(f"保存数据到表 '{table_name}' 时发生 IntegrityError (可能是重复记录): {e}")
-        print("如果你希望覆盖重复记录，请考虑在保存前删除旧数据，或使用不同的 `if_exists`策略 (如 'replace'，但这会替换整个表)。")
+        # 如果是由于并发写入相同数据导致的，可以接受，数据已存在。
+        print(f"保存数据到表 '{table_name}' 时发生 IntegrityError (可能是重复记录，已忽略): {e}")
+        # print("如果你希望覆盖重复记录，请考虑在保存前删除旧数据，或使用不同的 `if_exists`策略 (如 'replace'，但这会替换整个表)。") # 原注释保留参考
     except sqlite3.Error as e:
-        print(f"保存DataFrame到数据库表 '{table_name}' 时发生错误: {e}")
+        print(f"保存DataFrame到数据库表 '{table_name}' 时发生 SQLite错误: {e}") # 更具体的错误类型
     except Exception as e_gen:
         print(f"保存DataFrame时发生未知错误 (表: '{table_name}'): {e_gen}")
     finally:

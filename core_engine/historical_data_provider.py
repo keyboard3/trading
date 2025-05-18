@@ -1,7 +1,7 @@
 from typing import List, Optional, Dict, Any
 import datetime
 import pandas as pd
-# import yfinance as yf # yfinance is not directly used in this file anymore for fetching, only for _interval_to_pandas_rule_and_seconds potentially
+import yfinance as yf # 取消注释
 import sqlite3
 import time
 import os
@@ -12,6 +12,7 @@ from datetime import timezone, timedelta
 # 假设 historical_data_provider.py 和 data_loader.py 在同一个 core_engine 包中
 try:
     from .data_loader import DB_FILE, OHLCV_MINUTE_TABLE_NAME, OHLCV_DAILY_TABLE_NAME
+    from .data_loader import save_df_to_db, delete_data_from_db # 新增导入
 except ImportError:
     # Fallback for scenarios where relative import might fail (e.g. direct script run for testing, though unlikely for this file)
     print("Warning: Relative import of data_loader constants failed. Ensure correct package structure.")
@@ -35,13 +36,13 @@ def _interval_to_pandas_rule_and_seconds(interval_str: str) -> tuple[Optional[st
     Now returns Optional[str] for rules and yf_interval as yf part might not always be relevant.
     """
     if interval_str == "1m":
-        return "T", 60, "1m"
+        return "1min", 60, "1m"
     elif interval_str == "5m":
-        return "5T", 300, "5m"
+        return "5min", 300, "5m"
     elif interval_str == "15m":
-        return "15T", 900, "15m"
+        return "15min", 900, "15m"
     elif interval_str == "30m":
-        return "30T", 1800, "30m"
+        return "30min", 1800, "30m"
     elif interval_str == "1h":
         return "H", 3600, "1h" # yfinance also accepts "60m"
     elif interval_str == "1d":
@@ -116,10 +117,12 @@ async def fetch_historical_klines_core(
     interval_str: str, 
     limit: int, 
     end_time_ts: Optional[int] = None,
-    source_preference: str = "db_only" # This param might be less relevant now, or re-purposed
+    source_preference: str = "db_then_yahoo" # 修改默认值，或在API层决定
 ) -> List[Dict]:
     
-    pd_interval_str, interval_seconds, _ = _interval_to_pandas_rule_and_seconds(interval_str)
+    df_yf_raw: pd.DataFrame = pd.DataFrame() # Initialize df_yf_raw
+
+    pd_interval_str, interval_seconds, yf_interval_for_fetch = _interval_to_pandas_rule_and_seconds(interval_str) # 获取yf_interval
     if pd_interval_str is None:
         print(f"[HistProv] Invalid or unhandled interval: {interval_str} for symbol {symbol}. Returning empty list.")
         return []
@@ -128,74 +131,201 @@ async def fetch_historical_klines_core(
     if end_time_ts:
         requested_end_dt_utc = datetime.datetime.fromtimestamp(end_time_ts, timezone.utc)
 
-    # Determine data source table and base interval for fetching
-    source_table_to_query = OHLCV_DAILY_TABLE_NAME # Default to daily data
-    fetch_raw_interval_for_resampling = "1d" # Default: assume we fetch daily to resample
+    source_table_to_query = OHLCV_DAILY_TABLE_NAME 
+    fetch_raw_interval_for_resampling = "1d" 
+    target_table_for_saving_yf_data = OHLCV_DAILY_TABLE_NAME # 表名，用于保存从yf下载的数据
+    yf_interval_to_fetch_raw = "1d" # 从 yfinance 获取数据的原始粒度
 
-    is_minute_request = interval_str.endswith('m') or interval_str.endswith('H') or interval_str.endswith('T')
+    is_minute_request = interval_str.endswith(('m', 'H', 'T')) # 更简洁的检查
     
     print(f"[HistProv] Request for {symbol}@{interval_str}. End time: {requested_end_dt_utc}. Is minute request: {is_minute_request}")
 
     if is_minute_request:
-        # Check if the request end time is within our recent threshold for minute data
         threshold_date_utc = datetime.datetime.now(timezone.utc) - timedelta(days=RECENT_DATA_THRESHOLD_DAYS)
         if requested_end_dt_utc > threshold_date_utc:
-            print(f"[HistProv] Request is for recent minute data. Attempting to use {OHLCV_MINUTE_TABLE_NAME}.")
+            print(f"[HistProv] Request is for recent minute data. DB target: {OHLCV_MINUTE_TABLE_NAME}.")
             source_table_to_query = OHLCV_MINUTE_TABLE_NAME
-            fetch_raw_interval_for_resampling = "1m" # We'll fetch 1m data to resample
+            fetch_raw_interval_for_resampling = "1m"
+            target_table_for_saving_yf_data = OHLCV_MINUTE_TABLE_NAME
+            yf_interval_to_fetch_raw = "1m" # 如果是分钟级请求，尝试获取1分钟原始数据
         else:
-            print(f"[HistProv] Request is for older minute data (older than {RECENT_DATA_THRESHOLD_DAYS} days). Will use {OHLCV_DAILY_TABLE_NAME} and resample.")
+            print(f"[HistProv] Request is for older minute data (older than {RECENT_DATA_THRESHOLD_DAYS} days). DB target: {OHLCV_DAILY_TABLE_NAME}.")
+            # 对于非常旧的分钟数据，仍从日线重采样，但下载时可以考虑获取日线
+            target_table_for_saving_yf_data = OHLCV_DAILY_TABLE_NAME # 保存到日线表
+            yf_interval_to_fetch_raw = "1d"
+
     else: # Daily, Weekly, Monthly request
-        print(f"[HistProv] Request is for daily or longer interval. Using {OHLCV_DAILY_TABLE_NAME}.")
+        print(f"[HistProv] Request is for daily or longer interval. DB target: {OHLCV_DAILY_TABLE_NAME}.")
         source_table_to_query = OHLCV_DAILY_TABLE_NAME
         fetch_raw_interval_for_resampling = "1d"
+        target_table_for_saving_yf_data = OHLCV_DAILY_TABLE_NAME
+        yf_interval_to_fetch_raw = "1d"
 
-    # Estimate query window based on the TARGET interval and limit
-    # If we fetch 1m to resample to 1h, and limit is 100 (1h bars), we need 100 * 60 = 6000 1m bars.
-    base_interval_seconds_for_query_estimation = 60 # Assume 1m if using minute table
+    # Ensure yf_interval_for_fetch is set if we intend to fetch from yfinance
+    # Override yf_interval_to_fetch_raw based on what _interval_to_pandas_rule_and_seconds gave for yfinance
+    # For minute data, we always want to fetch '1m' from yfinance if possible.
+    # For daily+ data, yf_interval_for_fetch (from _interval_to_pandas_rule_and_seconds based on interval_str) should be fine.
+    if is_minute_request:
+        yf_final_fetch_interval = "1m" # Always try to get 1m for minute requests
+    elif yf_interval_for_fetch: # e.g. "1d", "1wk"
+        yf_final_fetch_interval = yf_interval_for_fetch
+    else: # Fallback if yf_interval_for_fetch was None (e.g. for custom daily rules like "2D")
+        yf_final_fetch_interval = "1d"
+
+
+    base_interval_seconds_for_query_estimation = 60 
     if source_table_to_query == OHLCV_DAILY_TABLE_NAME:
-        base_interval_seconds_for_query_estimation = 86400 # Assume 1d if using daily table
+        base_interval_seconds_for_query_estimation = 86400 
     
-    # Heuristic for query window: fetch more raw data points than the final limit might suggest,
-    # especially if resampling from finer to coarser granularity.
-    # If target interval is `interval_seconds` and limit is `limit`,
-    # total seconds for final output is `interval_seconds * limit`.
-    # Number of base data points needed is `(interval_seconds * limit) / base_interval_seconds_for_query_estimation`
-    estimated_base_points_needed = (interval_seconds * limit) / base_interval_seconds_for_query_estimation
-    estimated_seconds_needed = estimated_base_points_needed * base_interval_seconds_for_query_estimation 
-                                 # This simplifies to interval_seconds * limit, which is the duration of the final output data.
-                                 # We need to fetch data covering AT LEAST this duration of raw points.
-    if interval_seconds == 0: # Handle non-standard daily/weekly/monthly from _interval_to_pandas_rule_and_seconds
-        estimated_seconds_needed = 86400 * limit * (30 if pd_interval_str.endswith('M') else (7 if pd_interval_str.endswith('W') else 1)) # Rough estimate
+    estimated_base_points_needed = (interval_seconds * limit) / base_interval_seconds_for_query_estimation if base_interval_seconds_for_query_estimation > 0 else limit
+    # estimated_seconds_needed = estimated_base_points_needed * base_interval_seconds_for_query_estimation
+    estimated_seconds_needed = interval_seconds * limit if interval_seconds > 0 else 86400 * limit * (30 if pd_interval_str.endswith('M') else (7 if pd_interval_str.endswith('W') else 1))
 
-    # Fetch a bit more to be safe, e.g., 1.5x to 2x the estimated duration or number of points
-    # query_duration_seconds = estimated_seconds_needed * 2.0 # Fetch 2x the duration
-    # More robust: if limit is 200 bars of 5min, that's 1000 minutes. We need 1000 1-min bars. Fetch 1500-2000 1-min bars.
-    # A simpler heuristic for now: multiply limit by a factor based on resampling ratio
-    limit_multiplier = max(1.5, interval_seconds / base_interval_seconds_for_query_estimation if base_interval_seconds_for_query_estimation > 0 else 1.5)
-    query_limit_for_raw_data = int(limit * limit_multiplier) if interval_seconds > 0 else limit * 2 # Fetch more raw data points
-    if query_limit_for_raw_data < 200: query_limit_for_raw_data = 200 # Fetch at least a decent chunk
 
-    # Calculate query start time based on the raw data points we need
-    start_dt_utc_for_query = requested_end_dt_utc - timedelta(seconds=query_limit_for_raw_data * base_interval_seconds_for_query_estimation)
+    limit_multiplier = max(1.5, interval_seconds / base_interval_seconds_for_query_estimation if base_interval_seconds_for_query_estimation > 0 and interval_seconds > 0 else 1.5)
+    query_limit_for_raw_data = int(limit * limit_multiplier) 
+    if query_limit_for_raw_data < 200: query_limit_for_raw_data = 200 
 
-    print(f"[HistProv] Fetching K-lines for {symbol}@{interval_str} from table '{source_table_to_query}'.")
-    print(f"         Target end: {requested_end_dt_utc}, Query start for raw: {start_dt_utc_for_query}, Estimated raw points to fetch: {query_limit_for_raw_data}")
+    start_dt_utc_for_query = requested_end_dt_utc - timedelta(seconds=query_limit_for_raw_data * base_interval_seconds_for_query_estimation if base_interval_seconds_for_query_estimation > 0 else estimated_seconds_needed * 1.5)
+
+
+    print(f"[HistProv] DB Read: Table='{source_table_to_query}', Symbol='{symbol}', TargetEnd='{requested_end_dt_utc}', QueryStart='{start_dt_utc_for_query}'")
 
     klines_data: List[Dict] = []
+    df_to_process: pd.DataFrame = pd.DataFrame()
 
-    df_db = await asyncio.to_thread(
-        _fetch_from_db_sync, 
-        source_table_to_query, # Pass the determined table name
-        symbol, 
-        start_dt_utc_for_query,
-        requested_end_dt_utc
-    )
+    # 1. Attempt to fetch from DB
+    if "db" in source_preference: # e.g., "db_only", "db_then_yahoo"
+        df_db = await asyncio.to_thread(
+            _fetch_from_db_sync, 
+            source_table_to_query, 
+            symbol, 
+            start_dt_utc_for_query,
+            requested_end_dt_utc
+        )
+        if df_db is not None and not df_db.empty:
+            print(f"[HistProv] DB Hit: Found {len(df_db)} raw records for {symbol} in {source_table_to_query}.")
+            df_to_process = df_db
+        else:
+            print(f"[HistProv] DB Miss: No records found for {symbol} in {source_table_to_query} for the query time range.")
 
-    if df_db is not None and not df_db.empty:
-        print(f"[HistProv] Found {len(df_db)} raw records for {symbol} in {source_table_to_query} (raw interval: {fetch_raw_interval_for_resampling}).")
-        # Pass the original requested interval_str for final resampling target
-        df_resampled = _resample_and_format_df(df_db, pd_interval_str, symbol, interval_str) 
+    # DIAGNOSTIC LOGS
+    print(f"[HistProv DEBUG] Before Yahoo fetch check: df_to_process.empty is {df_to_process.empty}, source_preference is '{source_preference}'")
+
+    # 2. If DB is empty or preference allows Yahoo, try fetching from Yahoo Finance
+    # A more sophisticated check for "data sufficiency" could be added here later.
+    # For now, if df_to_process is empty and we can use Yahoo, we fetch.
+    if df_to_process.empty and "yahoo" in source_preference: # e.g., "db_then_yahoo", "yahoo_only"
+        print(f"[HistProv] DB data insufficient or not preferred. Attempting fetch from Yahoo Finance for {symbol}@{yf_final_fetch_interval}.")
+        
+        # Determine start_time for yfinance fetch
+        # We want 'limit' number of 'interval_str' klines.
+        # yf_start_time should be far enough back to get enough raw data for this.
+        # If yf_final_fetch_interval is '1m', we need limit * (interval_seconds / 60) 1-minute bars.
+        yf_base_interval_seconds, _, _ = _interval_to_pandas_rule_and_seconds(yf_final_fetch_interval)
+        yf_base_interval_seconds = yf_base_interval_seconds[1] if isinstance(yf_base_interval_seconds, tuple) else 60 # get seconds from tuple or default for "1m"
+
+        # Calculate how many yf_final_fetch_interval periods are in one target interval_str period
+        ratio_target_to_yf_raw = interval_seconds / yf_base_interval_seconds if yf_base_interval_seconds > 0 else 1
+        num_yf_raw_bars_needed = int(limit * ratio_target_to_yf_raw * 1.5) # Fetch 1.5x estimated raw yf bars
+        if num_yf_raw_bars_needed < 200 : num_yf_raw_bars_needed = 200 # Min fetch
+
+        # yf_duration_needed = timedelta(seconds=num_yf_raw_bars_needed * yf_base_interval_seconds)
+        # yf_fetch_start_time = requested_end_dt_utc - yf_duration_needed
+        
+        # Simpler yf_fetch_start_time, similar to db query logic, but based on yf_final_fetch_interval
+        yf_fetch_start_time = requested_end_dt_utc - timedelta(seconds=num_yf_raw_bars_needed * yf_base_interval_seconds)
+
+
+        df_yf_raw = await asyncio.to_thread(
+            _fetch_from_yfinance_sync,
+            symbol,
+            yf_final_fetch_interval, # Fetch at this granularity (e.g., "1m" or "1d")
+            yf_fetch_start_time,
+            requested_end_dt_utc,
+            num_yf_raw_bars_needed, # Pass a target number of raw bars
+            yf_base_interval_seconds 
+        )
+
+        if df_yf_raw is not None and not df_yf_raw.empty:
+            print(f"[HistProv] Yahoo Hit: Fetched {len(df_yf_raw)} raw records for {symbol}@{yf_final_fetch_interval} from Yahoo Finance.")
+            
+            # Prepare df_yf_raw for saving to DB and processing
+            df_yf_to_save = df_yf_raw.copy()
+            df_yf_to_save.reset_index(inplace=True) # Move DatetimeIndex to a column
+            # yfinance returns 'Datetime' or 'Date' as index name, to_datetime converts it
+            df_yf_to_save.rename(columns={df_yf_to_save.columns[0]: 'timestamp'}, inplace=True) 
+            df_yf_to_save['timestamp'] = pd.to_datetime(df_yf_to_save['timestamp'], utc=True)
+            df_yf_to_save['symbol'] = symbol
+            
+            # Ensure lowercase column names as expected by save_df_to_db
+            df_yf_to_save.columns = [col.lower() for col in df_yf_to_save.columns]
+            
+            # Select only columns needed for save_df_to_db
+            cols_for_db = ['timestamp', 'symbol', 'open', 'high', 'low', 'close', 'volume']
+            df_yf_to_save = df_yf_to_save[[col for col in cols_for_db if col in df_yf_to_save.columns]]
+
+            if not df_yf_to_save.empty and 'timestamp' in df_yf_to_save.columns and 'symbol' in df_yf_to_save.columns:
+                print(f"[HistProv] Saving {len(df_yf_to_save)} fetched Yahoo Finance records to {target_table_for_saving_yf_data} for {symbol}.")
+                
+                # Convert datetime to string for delete_data_from_db if it expects strings
+                # yf_fetch_start_time and requested_end_dt_utc are already datetime objects
+                # delete_data_from_db takes 'YYYY-MM-DD' strings.
+                # We should delete a slightly wider range than fetched to be safe, or precisely the fetched range.
+                # For simplicity, let's use the min/max timestamp from the fetched data.
+                min_ts_to_delete = df_yf_to_save['timestamp'].min().strftime('%Y-%m-%d %H:%M:%S')
+                max_ts_to_delete = df_yf_to_save['timestamp'].max().strftime('%Y-%m-%d %H:%M:%S')
+
+                # It's better to delete based on the actual data fetched to avoid deleting too much or too little.
+                # Convert to 'YYYY-MM-DD' for delete_data_from_db
+                delete_start_date_str = df_yf_to_save['timestamp'].min().strftime('%Y-%m-%d')
+                delete_end_date_str = df_yf_to_save['timestamp'].max().strftime('%Y-%m-%d')
+
+                print(f"[HistProv] Deleting existing data for {symbol} in {target_table_for_saving_yf_data} between {delete_start_date_str} and {delete_end_date_str} before saving new Yahoo data.")
+                await asyncio.to_thread(
+                    delete_data_from_db,
+                    symbols=[symbol],
+                    start_date=delete_start_date_str,
+                    end_date=delete_end_date_str,
+                    table_name=target_table_for_saving_yf_data
+                )
+                
+                await asyncio.to_thread(
+                    save_df_to_db, 
+                    df_yf_to_save, 
+                    target_table_for_saving_yf_data
+                )
+                # After saving, df_to_process should be this new data.
+                # We need to ensure it's in the same format as df_db (e.g. 'time' column, potentially indexed by 'time')
+                # For now, let _fetch_from_db_sync re-fetch it to ensure consistency in format for _resample_and_format_df
+                # Or, re-format df_yf_to_save to match what _fetch_from_db_sync would return
+                
+                # Re-format df_yf_raw to match df_db for subsequent processing
+                # df_yf_raw has DatetimeIndex. _fetch_from_db_sync returns df with 'time' column.
+                # _resample_and_format_df can handle both DatetimeIndex or 'time' column.
+                # Let's ensure df_yf_raw has lowercase column names as expected by _resample_and_format_df.
+                df_yf_raw.columns = [col.lower() for col in df_yf_raw.columns]
+                df_to_process = df_yf_raw
+
+            else:
+                print(f"[HistProv] Fetched Yahoo data for {symbol} was empty or malformed after processing for DB save.")
+        else:
+            print(f"[HistProv] Yahoo Miss: No data fetched from Yahoo Finance for {symbol}@{yf_final_fetch_interval}.")
+    
+    # 3. Process the data (either from DB or from Yahoo)
+    if df_to_process is not None and not df_to_process.empty:
+        # Ensure 'time' column exists if index is not already DatetimeIndex for _resample_and_format_df
+        # _fetch_from_db_sync renames 'timestamp' to 'time'.
+        # If df_to_process came from df_yf_raw, it has a DatetimeIndex.
+        # _resample_and_format_df should handle both cases.
+        
+        print(f"[HistProv] Processing {len(df_to_process)} raw records for {symbol} (Source: {'Yahoo' if df_to_process is df_yf_raw else 'DB'}). Raw interval for resampling: {fetch_raw_interval_for_resampling}")
+        
+        # If df_to_process is from Yahoo (df_yf_raw), its index is DatetimeIndex and columns are lowercase.
+        # If df_to_process is from DB (df_db), it has 'time' column from 'timestamp'.
+        # _resample_and_format_df expects DatetimeIndex or 'time' column and lowercase ohlcv columns.
+        
+        df_resampled = _resample_and_format_df(df_to_process, pd_interval_str, symbol, interval_str) 
         
         if not df_resampled.empty:
             if limit > 0 and len(df_resampled) > limit:
@@ -231,9 +361,6 @@ async def fetch_historical_klines_core(
         else:
              print(f"[HistProv] DataFrame for {symbol} from {source_table_to_query} was empty after resampling to {interval_str}.")
     else:
-        print(f"[HistProv] No records found for {symbol} in {source_table_to_query} for the query time range.")
-    
-    if not klines_data:
         print(f"[HistProv] No klines data produced for {symbol}@{interval_str} from {source_table_to_query}. Returning empty list.")
     
     return klines_data
@@ -301,8 +428,8 @@ def _fetch_from_yfinance_sync(
     yf_interval_str: str, 
     yf_start_time: datetime.datetime, 
     yf_end_time: datetime.datetime,
-    target_limit: int,
-    target_interval_seconds: int
+    target_limit: int, # Renamed from target_limit for clarity
+    target_interval_seconds: int # Renamed from target_interval_seconds
 ) -> pd.DataFrame:
     try:
         # yfinance usually performs better if start/end are just dates for daily, 
@@ -322,17 +449,29 @@ def _fetch_from_yfinance_sync(
         # Estimate start time for yfinance query
         # yfinance can be fussy about start/end for very fine intervals over long periods.
         # Let's try to fetch roughly target_limit * 1.5 records initially.
-        estimated_yf_duration = timedelta(seconds=target_limit * target_interval_seconds * 1.5) # Use direct timedelta
-        yf_query_start_time = yf_end_time - estimated_yf_duration
+        # estimated_yf_duration = timedelta(seconds=target_limit * target_interval_seconds * 1.5) 
+        # yf_query_start_time = yf_end_time - estimated_yf_duration
+        
+        # Use the passed yf_start_time directly. It's calculated upstream.
+        yf_query_start_time = yf_start_time
         
         # Cap yfinance intraday query range (e.g., max 59 days for 1m)
-        if yf_interval_str == "1m" and (yf_end_time - yf_query_start_time) > timedelta(days=59): # Use direct timedelta
-            yf_query_start_time = yf_end_time - timedelta(days=59) # Use direct timedelta
-        elif yf_interval_str in ["5m", "15m", "30m"] and (yf_end_time - yf_query_start_time) > timedelta(days=720): # Approx 2 years for >1m intraday # Use direct timedelta
-            # yfinance has 730 days limit for intervals > 1m and < 1d.
-             yf_query_start_time = yf_end_time - timedelta(days=720) # Use direct timedelta
+        # This capping might be too aggressive if yf_start_time was carefully calculated.
+        # Consider removing or making it conditional. For now, retain with a log.
+        max_days_for_1m = 59
+        max_days_for_gt_1m_lt_1d = 720 # yfinance actual limit is 730 days
+        
+        if yf_interval_str == "1m":
+            if (yf_query_end_time - yf_query_start_time).days > max_days_for_1m:
+                print(f"[HistProv][YF] Warning: Query for {yf_symbol}@{yf_interval_str} ({ (yf_query_end_time - yf_query_start_time).days } days) exceeds typical {max_days_for_1m}-day limit for yfinance 1m. Adjusting start time.")
+                yf_query_start_time = yf_query_end_time - timedelta(days=max_days_for_1m)
+        elif yf_interval_str not in ["1d", "5d", "1wk", "1mo", "3mo"]: # Intraday other than 1m
+            if (yf_query_end_time - yf_query_start_time).days > max_days_for_gt_1m_lt_1d:
+                print(f"[HistProv][YF] Warning: Query for {yf_symbol}@{yf_interval_str} ({ (yf_query_end_time - yf_query_start_time).days } days) exceeds typical {max_days_for_gt_1m_lt_1d}-day limit for yfinance intraday. Adjusting start time.")
+                yf_query_start_time = yf_query_end_time - timedelta(days=max_days_for_gt_1m_lt_1d)
 
-        print(f"[historical_data_provider_yf] Querying yfinance for {yf_symbol} interval {yf_interval_str} from {yf_query_start_time} to {yf_query_end_time}")
+
+        print(f"[HistProv][YF] Querying yfinance for {yf_symbol} interval {yf_interval_str} from {yf_query_start_time} to {yf_query_end_time}")
 
         df_yf = yf.download(
             tickers=yf_symbol, 
@@ -340,12 +479,14 @@ def _fetch_from_yfinance_sync(
             end=yf_query_end_time, # yfinance end is exclusive for intraday
             interval=yf_interval_str,
             progress=False,
-            show_errors=True
         )
 
         if df_yf.empty:
-            print(f"[historical_data_provider_yf] No data returned from yfinance for {yf_symbol}")
+            print(f"[HistProv][YF] No data returned from yfinance for {yf_symbol} after download call.") # 更明确的日志
             return pd.DataFrame()
+
+        print(f"[HistProv][YF] yf.download for {yf_symbol} returned {len(df_yf)} rows. Columns: {df_yf.columns.tolist()}")
+        # print(f"[HistProv][YF] df_yf.head():\n{df_yf.head()}") # 可以取消注释以查看数据头
 
         # Ensure UTC timezone and rename columns
         if df_yf.index.tz is None:
@@ -353,6 +494,13 @@ def _fetch_from_yfinance_sync(
         else:
             df_yf.index = df_yf.index.tz_convert('UTC')
         
+        # Handle MultiIndex columns if present (e.g., [('Open', 'MSFT'), ...])
+        if isinstance(df_yf.columns, pd.MultiIndex):
+            print(f"[HistProv][YF] Detected MultiIndex columns: {df_yf.columns.tolist()}. Flattening.")
+            # Flatten MultiIndex columns: use the first level (e.g., 'Open' from ('Open', 'MSFT'))
+            df_yf.columns = df_yf.columns.get_level_values(0)
+            print(f"[HistProv][YF] Columns after flattening MultiIndex: {df_yf.columns.tolist()}")
+
         df_yf.rename(columns={
             'Open': 'open',
             'High': 'high',
@@ -362,14 +510,23 @@ def _fetch_from_yfinance_sync(
         }, inplace=True)
         
         # Select only necessary columns
-        df_yf = df_yf[['open', 'high', 'low', 'close', 'volume']]
+        # df_yf = df_yf[['open', 'high', 'low', 'close', 'volume']] # Ensure these are lowercase from rename
+        df_yf = df_yf[['open', 'high', 'low', 'close', 'volume']].copy() # Use .copy() to avoid SettingWithCopyWarning
         df_yf.dropna(subset=['open', 'high', 'low', 'close'], inplace=True)
 
-        print(f"[historical_data_provider_yf] Fetched {len(df_yf)} rows from yfinance for {yf_symbol}")
+        print(f"[HistProv][YF] Fetched {len(df_yf)} rows from yfinance for {yf_symbol}")
         return df_yf
 
     except Exception as e_yf:
-        print(f"[historical_data_provider_yf] Error fetching from yfinance for {yf_symbol}: {e_yf}")
+        print(f"[HistProv][YF] Error during yfinance fetch or processing for {yf_symbol}: {e_yf}") # 修改日志
+        # 尝试打印df_yf的状态，即使在异常中
+        if 'df_yf' in locals() and df_yf is not None:
+            print(f"[HistProv][YF] df_yf state at time of exception: Empty={df_yf.empty}")
+            if not df_yf.empty:
+                print(f"[HistProv][YF] df_yf columns at exception: {df_yf.columns.tolist()}")
+                # print(f"[HistProv][YF] df_yf.head() at exception:\n{df_yf.head()}")
+        else:
+            print("[HistProv][YF] df_yf was not defined or None at time of exception.")
         return pd.DataFrame()
 
 # ... (rest of the file, including _fetch_from_db_sync and _fetch_from_yfinance_sync) ... 

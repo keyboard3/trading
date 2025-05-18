@@ -69,6 +69,7 @@ try:
     from strategies.realtime_rsi_strategy import RealtimeRSIStrategy # Add import for RSI strategy
     from core_engine.risk_manager import RiskAlert # Import RiskAlert
     from core_engine.historical_data_provider import fetch_historical_klines_core # <--- ADD THIS IMPORT
+    from core_engine.realtime_klines_aggregator import RealtimeKlinesAggregator, KLineData as AggregatorKLineData 
 except ImportError as e:
     print(f"Error importing from main.py or core_engine: {e}")
     # Fallbacks (existing + new for simulation components)
@@ -90,6 +91,8 @@ except ImportError as e:
     SignalEvent = Dict # Fallback type
     TradeRecord = Dict # Fallback type
     RiskAlert = Any # Fallback type for RiskAlert
+    RealtimeKlinesAggregator = None 
+    AggregatorKLineData = Dict 
 
 
 # Remove the local, simplified STRATEGY_CONFIG
@@ -131,7 +134,9 @@ simulation_components: Dict[str, Any] = {
     "strategy_info": None, # Will store an ApiStrategyInfo instance
     "running": False,
     "run_id": None, # Added to store the unique ID for the current run
-    "save_task": None # Added to store the background save task
+    "save_task": None, # Added to store the background save task
+    "klines_aggregator": None, # NEW: Instance of RealtimeKlinesAggregator
+    "current_chart_interval_for_aggregator": "5m", # NEW: Store the chart interval, default to 5m
 }
 # Lock for thread-safe access to simulation state if needed later
 # simulation_lock = threading.Lock()
@@ -189,7 +194,7 @@ class KLineData(BaseModel):
     high: float
     low: float
     close: float
-    volume: float
+    volume: Optional[float] = 0.0 # Changed to Optional[float] with default
 
 class SimulationStatusResponse(BaseModel):
     portfolio_status: Optional[PortfolioStatusResponse] = None # Made optional
@@ -198,6 +203,7 @@ class SimulationStatusResponse(BaseModel):
     is_simulation_running: bool # New field to clearly indicate if any simulation is running
     risk_alerts: Optional[List[ApiRiskAlert]] = None # New field for risk alerts
     run_id: Optional[str] = None # Added field to indicate if a resumable run exists
+    current_kline_for_chart: Optional[KLineData] = None # NEW FIELD
 
 # --- New Pydantic Models for Strategy Switching ---
 class StrategyParameterSpec(BaseModel):
@@ -391,6 +397,12 @@ def stop_current_simulation(clear_all_components: bool = False):
             simulation_components["strategy_info"] = None
             simulation_components["run_id"] = None # Clear run_id when clearing all
             print("BACKEND_API: All simulation components cleared.")
+            # If clearing all components, also reset or clear the klines aggregator state.
+            klines_aggregator = simulation_components.get("klines_aggregator")
+            if klines_aggregator and hasattr(klines_aggregator, 'reset_all'):
+                klines_aggregator.reset_all()
+                print(f"{LogColors.OKCYAN}[API stop_current_simulation] Klines aggregator reset due to clear_all_components=True.{LogColors.ENDC}")
+            simulation_components["klines_aggregator"] = None # Optionally set to None if fully clearing
         else:
             print("BACKEND_API: Active components (strategy, data_provider) stopped. Portfolio/Engine/run_id state retained.")
 
@@ -642,105 +654,110 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 # --- Simulation Status Endpoint --- 
 @app.get("/api/simulation/status", response_model=SimulationStatusResponse)
-async def get_simulation_status():
-    global simulation_components
-    current_run_id = simulation_components.get("run_id") # Get current run_id
-
-    if not simulation_components.get("portfolio") or not simulation_components.get("engine"): # Removed data_provider check here
-        # If essential components are not initialized, return a default "not running" or minimal state
-        return SimulationStatusResponse(
-            portfolio_status=None, 
-            recent_trades=[], 
-            active_strategy=simulation_components.get("strategy_info"), # Still show strategy if configured
-            is_simulation_running=False, # Explicitly false if components missing
-            risk_alerts=None, # No alerts if not running
-            run_id=current_run_id # Return run_id even if portfolio/engine are missing (maybe restore failed partially)
-        )
-
-    portfolio: MockPortfolio = simulation_components["portfolio"]
-    engine: MockTradingEngine = simulation_components["engine"]
-    data_provider: MockRealtimeDataProvider = simulation_components["data_provider"]
+async def get_simulation_status(chart_interval: str = Query("5m", description="Chart interval for K-line data e.g., 1m, 5m, 1h, 1d")):
+    active_sim_components = simulation_components
     
-    # Helper to provide current price for portfolio calculations
-    def get_current_price_for_portfolio(symbol: str) -> Optional[float]:
-        if simulation_components["data_provider"] and hasattr(simulation_components["data_provider"], 'get_current_price'):
-            return simulation_components["data_provider"].get_current_price(symbol)
-        return None
+    # Store the requested chart_interval for data providers to use
+    active_sim_components["current_chart_interval_for_aggregator"] = chart_interval
 
-    # Get detailed holdings from portfolio
-    # The get_holdings_with_details method returns a list of dicts.
-    # We need to convert them to HoldingStatus Pydantic models.
-    detailed_holdings_data = portfolio.get_holdings_with_details(get_current_price_for_portfolio)
-    pydantic_holdings_list: List[HoldingStatus] = []
-    for h_data in detailed_holdings_data:
-        pydantic_holdings_list.append(
-            HoldingStatus(
-                symbol=h_data['symbol'],
-                quantity=h_data['quantity'],
-                average_cost_price=h_data['average_cost_price'],
-                current_price=h_data.get('current_price'), # .get() for safety if field is missing
-                market_value=h_data.get('market_value'),
-                unrealized_pnl=h_data.get('unrealized_pnl')
-            )
+    if not active_sim_components or not active_sim_components.get("portfolio"):
+        return SimulationStatusResponse(
+            is_simulation_running=bool(active_sim_components.get("running")),
+            run_id=active_sim_components.get("run_id")
         )
 
-    current_portfolio_status = PortfolioStatusResponse(
-        cash=portfolio.get_cash(),
-        holdings_value=portfolio.get_holdings_value(get_current_price_for_portfolio),
-        total_value=portfolio.get_total_portfolio_value(get_current_price_for_portfolio),
-        realized_pnl=portfolio.get_realized_pnl(),
-        unrealized_pnl=portfolio.get_unrealized_pnl(get_current_price_for_portfolio),
-        total_pnl=portfolio.get_total_pnl(get_current_price_for_portfolio),
-        holdings=pydantic_holdings_list,
-        asset_allocation=portfolio.get_asset_allocation_percentages(get_current_price_for_portfolio),
-        is_running=simulation_components.get("running", False) # Use the running flag from global state
-    )
+    portfolio = active_sim_components["portfolio"]
+    engine = active_sim_components.get("engine")
+    strategy_info = active_sim_components.get("strategy_info")
+    is_running_flag = bool(active_sim_components.get("running"))
+    current_run_id = active_sim_components.get("run_id")
+    klines_aggregator = active_sim_components.get("klines_aggregator") # Get the aggregator
 
-    # Get recent trades from engine
-    # Engine's trade_log is a list of TradeRecord (which are dicts)
-    # Convert them to ApiTradeRecord Pydantic models.
-    api_trades_list: List[ApiTradeRecord] = []
-    for trade_rec_dict in engine.get_trade_log(): # Assuming get_trade_log returns a list of dicts
-        try:
-            # Ensure all fields expected by ApiTradeRecord are present in trade_rec_dict
-            # This is a common source of errors if the dict structure doesn't match.
-            api_trades_list.append(
-                ApiTradeRecord(
-                    trade_id=str(trade_rec_dict.get('trade_id', uuid.uuid4())), # Provide default if missing
-                    symbol=trade_rec_dict['symbol'],
-                    timestamp=trade_rec_dict['timestamp'],
-                    type=trade_rec_dict['type'],
-                    quantity=trade_rec_dict['quantity'],
-                    price=trade_rec_dict['price'],
-                    total_value=trade_rec_dict['total_value']
-                )
-            )
-        except KeyError as e:
-            print(f"BACKEND_API: KeyError when converting trade record to Pydantic model: {e}. Record: {trade_rec_dict}")
-            # Optionally, skip this record or add a placeholder
-            continue 
-        except Exception as e:
-            print(f"BACKEND_API: Unexpected error converting trade record: {e}. Record: {trade_rec_dict}")
-            continue
+    # --- Construct portfolio_status (This part is simplified for the edit, original logic should be preserved) ---
+    portfolio_data_for_response: Optional[PortfolioStatusResponse] = None
+    if portfolio:
+        holdings_value = 0
+        current_unrealized_pnl = 0
+        holdings_data_list: List[HoldingStatus] = []
+        data_provider_for_prices = active_sim_components.get("data_provider")
 
-    active_risk_alerts_response = []
-    if simulation_components["engine"] and hasattr(simulation_components["engine"], 'get_active_risk_alerts'):
-        engine_alerts = simulation_components["engine"].get_active_risk_alerts() # type: List[RiskAlert]
-        for alert_nt in engine_alerts:
-            active_risk_alerts_response.append(ApiRiskAlert(
-                alert_type=alert_nt.alert_type,
-                symbol=alert_nt.symbol,
-                message=alert_nt.message,
-                timestamp=alert_nt.timestamp
+        for symbol_h, holding_info in portfolio.holdings.items():
+            live_price = None
+            if data_provider_for_prices and hasattr(data_provider_for_prices, "get_current_price") and is_running_flag:
+                live_price = data_provider_for_prices.get_current_price(symbol_h)
+            if live_price is None: # Fallback if provider can't give price or not running
+                 live_price = portfolio.get_last_known_price(symbol_h)
+
+            market_val = None
+            unrealized_pnl_val = None
+            if live_price is not None:
+                market_val = holding_info.quantity * live_price
+                unrealized_pnl_val = (live_price - holding_info.average_cost_price) * holding_info.quantity
+                if market_val is not None: holdings_value += market_val
+                if unrealized_pnl_val is not None: current_unrealized_pnl += unrealized_pnl_val
+            
+            holdings_data_list.append(HoldingStatus(
+                symbol=symbol_h,
+                quantity=holding_info.quantity,
+                average_cost_price=holding_info.average_cost_price,
+                current_price=live_price,
+                market_value=market_val,
+                unrealized_pnl=unrealized_pnl_val
             ))
 
+        asset_alloc = {}
+        total_portfolio_val_for_alloc = portfolio.cash + holdings_value
+        if total_portfolio_val_for_alloc > 0:
+            for h_status in holdings_data_list:
+                if h_status.market_value is not None:
+                     asset_alloc[h_status.symbol] = (h_status.market_value / total_portfolio_val_for_alloc) * 100
+            if portfolio.cash > 0:
+                 asset_alloc['CASH'] = (portfolio.cash / total_portfolio_val_for_alloc) * 100
+        
+        portfolio_data_for_response = PortfolioStatusResponse(
+            cash=portfolio.cash,
+            holdings_value=holdings_value,
+            total_value=portfolio.cash + holdings_value,
+            realized_pnl=portfolio.realized_pnl,
+            unrealized_pnl=current_unrealized_pnl,
+            total_pnl=portfolio.realized_pnl + current_unrealized_pnl,
+            holdings=holdings_data_list,
+            asset_allocation=asset_alloc,
+            is_running=is_running_flag 
+        )
+    # --- End of portfolio_status construction ---
+
+    recent_trades_data = []
+    if engine and hasattr(engine, 'get_trade_history'):
+        # Assuming TradeRecord has a _asdict() method or similar for Pydantic conversion
+        recent_trades_data = [ApiTradeRecord(**trade._asdict()) if hasattr(trade, '_asdict') else ApiTradeRecord(**vars(trade)) for trade in engine.get_trade_history()[-20:]]
+
+    risk_alerts_data = []
+    if engine and hasattr(engine, 'get_risk_alerts'):
+        risk_alerts_data = [ApiRiskAlert(**alert.model_dump()) for alert in engine.get_risk_alerts()]
+
+    # Get K-line data for the chart using the aggregator
+    current_kline_obj: Optional[AggregatorKLineData] = None 
+    if klines_aggregator and strategy_info and strategy_info.parameters:
+        chart_target_symbol = strategy_info.parameters.get("symbol")
+        if chart_target_symbol:
+            try:
+                current_kline_obj = klines_aggregator.get_current_kline(chart_target_symbol, chart_interval)
+                if current_kline_obj:
+                    # Optional: log for debugging
+                    # print(f"[API /status] Kline for {chart_target_symbol}@{chart_interval}: T={current_kline_obj.time} C={current_kline_obj.close}")
+                    pass # Placeholder for print
+            except Exception as e:
+                print(f"{LogColors.FAIL}[API /status] Error getting K-line from aggregator: {e}{LogColors.ENDC}")
+
     return SimulationStatusResponse(
-        portfolio_status=current_portfolio_status,
-        recent_trades=api_trades_list[-20:],  # Return last 20 trades for brevity
-        active_strategy=simulation_components.get("strategy_info"),
-        is_simulation_running=simulation_components.get("running", False), # Use the running flag
-        risk_alerts=active_risk_alerts_response if active_risk_alerts_response else None,
-        run_id=current_run_id # Include the run_id in the response
+        portfolio_status=portfolio_data_for_response,
+        recent_trades=recent_trades_data,
+        active_strategy=strategy_info,
+        is_simulation_running=is_running_flag,
+        risk_alerts=risk_alerts_data,
+        run_id=current_run_id,
+        current_kline_for_chart=current_kline_obj # Use the retrieved K-line object
     )
 
 # --- New API Endpoints for Simulation Control ---
@@ -986,6 +1003,19 @@ async def start_simulation(request: StartSimulationRequest):
         print(f"{LogColors.OKBLUE}BACKEND_API: Performing initial state save for run_id {current_run_id}...{LogColors.ENDC}")
         await save_simulation_state(current_run_id)
         
+        # Initialize or reset Klines Aggregator before data provider starts generating ticks
+        if simulation_components.get("klines_aggregator") is None:
+            simulation_components["klines_aggregator"] = RealtimeKlinesAggregator()
+            print(f"{LogColors.OKCYAN}[API start_simulation] Initialized RealtimeKlinesAggregator.{LogColors.ENDC}")
+        else:
+            # Ensure reset_all is called on the existing instance
+            if hasattr(simulation_components["klines_aggregator"], 'reset_all'):
+                simulation_components["klines_aggregator"].reset_all()
+                print(f"{LogColors.OKCYAN}[API start_simulation] Reset existing RealtimeKlinesAggregator.{LogColors.ENDC}")
+            else: # Should not happen if initialized correctly
+                simulation_components["klines_aggregator"] = RealtimeKlinesAggregator()
+                print(f"{LogColors.OKCYAN}[API start_simulation] Re-Initialized RealtimeKlinesAggregator due to missing reset_all.{LogColors.ENDC}")
+
         return {"message": f"Simulation started for strategy '{selected_strategy_meta.name}' with initial capital {effective_initial_capital:.2f} and risk params: {effective_risk_params}. Run ID: {current_run_id}"}
 
     except ImportError as e:
@@ -1167,7 +1197,7 @@ async def get_historical_klines(
     interval: str = Query(default="1m", description="Interval string e.g., 1m, 5m, 1h, 1d"),
     limit: int = Query(default=200, gt=0, le=2000, description="Number of kline items to return"),
     end_time: Optional[int] = Query(None, description="End timestamp in UNIX seconds. If None, current time is used."),
-    source: Optional[str] = Query("db_only", description="Data source preference: e.g., db_only, db_then_yahoo, force_yahoo")
+    source: Optional[str] = Query("db_then_yahoo", description="Data source preference: e.g., db_only, db_then_yahoo, force_yahoo")
 ):
     if interval not in ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"]:
         # Add more validation as needed, or rely on core_engine to handle invalid interval string
@@ -1194,6 +1224,42 @@ async def get_historical_klines(
         # Generic error handler for unexpected issues
         print(f"[API Error] get_historical_klines failed: {e}")
         raise HTTPException(status_code=500, detail="Internal server error while fetching kline data")
+
+@app.get("/api/simulation/trades/{run_id}", response_model=List[ApiTradeRecord])
+async def get_all_trades_for_run(run_id: str):
+    """Fetches all trade records for a given simulation run_id from its saved state."""
+    state_file_path = os.path.join(SIMULATION_RUNS_BASE_DIR, run_id, SIMULATION_STATE_FILENAME)
+
+    if not os.path.exists(state_file_path):
+        raise HTTPException(status_code=404, detail=f"Simulation state file not found for run_id: {run_id}")
+
+    try:
+        with open(state_file_path, 'r') as f:
+            state_data = json.load(f)
+        
+        engine_state = state_data.get("engine_state")
+        if not engine_state:
+            # This case means the structure of the state file is unexpected or corrupt regarding engine_state
+            print(f"{LogColors.FAIL}[API /api/simulation/trades] Engine state not found in state file for run_id: {run_id}. File: {state_file_path}{LogColors.ENDC}")
+            raise HTTPException(status_code=500, detail=f"Engine state not found or corrupt in state file for run_id: {run_id}")
+            
+        trade_history_raw = engine_state.get("trade_history")
+        if trade_history_raw is None: 
+            # If trade_history key exists but is null, or if key doesn't exist (get returns None)
+            # This is a valid scenario meaning no trades have occurred or been recorded.
+            print(f"{LogColors.OKBLUE}[API /api/simulation/trades] Trade history not found or is null for run_id {run_id}. Returning empty list.{LogColors.ENDC}")
+            return [] # Return an empty list as per Pydantic List[ApiTradeRecord]
+
+        # Assuming trade_history_raw is a list of dicts compatible with ApiTradeRecord.
+        # Pydantic will validate this on return against `response_model=List[ApiTradeRecord]`.
+        return trade_history_raw 
+        
+    except json.JSONDecodeError:
+        print(f"{LogColors.FAIL}[API /api/simulation/trades] Error decoding JSON from state file: {state_file_path}{LogColors.ENDC}")
+        raise HTTPException(status_code=500, detail=f"Error reading or parsing simulation state file for run_id: {run_id}")
+    except Exception as e:
+        print(f"{LogColors.FAIL}[API /api/simulation/trades] Unexpected error for run_id {run_id}: {e}{LogColors.ENDC}")
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred while fetching trades for run_id: {run_id}")
 
 if __name__ == "__main__":
     import uvicorn

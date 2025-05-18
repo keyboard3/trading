@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { SimulationStatusResponse } from '../types';
+import type { SimulationStatusResponse, ApiTradeRecord, TradeMarkerData } from '../types';
 import PortfolioSummary from './PortfolioSummary';
 import HoldingsTable from './HoldingsTable';
 import TradesList from './TradesList';
@@ -7,17 +7,20 @@ import StrategyInfoDisplay from './StrategyInfoDisplay';
 import RiskAlertsDisplay from './RiskAlertsDisplay';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import RealtimeChartDisplay from './charts/RealtimeChartDisplay';
-import type { TradeMarkerData } from '../types';
+import { fetchAllTradesForRun } from '../api';
 
 const POLLING_INTERVAL_MS = 3000; // Poll every 3 seconds, was 5
 
 interface SimulationDisplayProps {
-  initialStatus: SimulationStatusResponse | null; // Make required
+  initialStatus: SimulationStatusResponse | null;
 }
 
 const SimulationDisplay: React.FC<SimulationDisplayProps> = ({ initialStatus }) => {
   const status = initialStatus;
-  
+  const [allTradesForChart, setAllTradesForChart] = useState<ApiTradeRecord[]>([]);
+  const [isLoadingAllTrades, setIsLoadingAllTrades] = useState<boolean>(false);
+  const [errorAllTrades, setErrorAllTrades] = useState<string | null>(null);
+
   useEffect(() => {
     console.log("[SimulationDisplay MOUNTED/UPDATED] Key: (from parent if passed), Props initialStatus changed or component mounted/updated. Current symbol:", status?.active_strategy?.parameters?.symbol);
     return () => {
@@ -25,11 +28,52 @@ const SimulationDisplay: React.FC<SimulationDisplayProps> = ({ initialStatus }) 
     };
   }, [initialStatus]); // Assuming initialStatus is the main prop driving its content
   
+  useEffect(() => {
+    const currentRunId = status?.run_id;
+    if (currentRunId) {
+      console.log(`[SimulationDisplay] Detected runId: ${currentRunId}. Fetching all trades.`);
+      setIsLoadingAllTrades(true);
+      setErrorAllTrades(null);
+      fetchAllTradesForRun(currentRunId)
+        .then(fetchedTrades => {
+          setAllTradesForChart(fetchedTrades);
+          console.log(`[SimulationDisplay] Fetched ${fetchedTrades.length} historical trades for runId ${currentRunId}.`);
+        })
+        .catch(err => {
+          console.error(`[SimulationDisplay] Error fetching all trades for runId ${currentRunId}:`, err);
+          setErrorAllTrades(err.message || 'Failed to load all trades');
+          setAllTradesForChart([]);
+        })
+        .finally(() => {
+          setIsLoadingAllTrades(false);
+        });
+    } else {
+      setAllTradesForChart([]);
+      console.log("[SimulationDisplay] No runId, clearing allTradesForChart.");
+    }
+  }, [status?.run_id]);
+
+  useEffect(() => {
+    if (status && status.recent_trades) {
+      if (!isLoadingAllTrades) {
+        setAllTradesForChart(prevAllTrades => {
+          const newTrades = status.recent_trades.filter(
+            (recentTrade: ApiTradeRecord) => 
+              !prevAllTrades.some(existingTrade => existingTrade.trade_id === recentTrade.trade_id)
+          );
+          if (newTrades.length > 0) {
+            console.log(`[SimulationDisplay] Merging ${newTrades.length} new trades from recent_trades.`);
+            return [...prevAllTrades, ...newTrades].sort((a, b) => a.timestamp - b.timestamp);
+          }
+          return prevAllTrades;
+        });
+      }
+    }
+  }, [status?.recent_trades, isLoadingAllTrades]);
+  
   // --- Render Main Status Display --- 
   const renderStatusDetails = () => {
-      // Check if status or portfolio_status exists
       if (!status || !status.portfolio_status) {
-          // If status exists but no portfolio, show simpler message
           if (status) {
              return (
                 <Card>
@@ -41,7 +85,6 @@ const SimulationDisplay: React.FC<SimulationDisplayProps> = ({ initialStatus }) 
                 </Card>
              );
           }
-          // If status itself is null (and parent isn't showing loading/error), show generic message
           return (
             <Card>
                 <CardContent className="pt-6">
@@ -51,12 +94,20 @@ const SimulationDisplay: React.FC<SimulationDisplayProps> = ({ initialStatus }) 
           );
       }
       
-      // We have portfolio status, render the details
-      // Prioritize symbol from active strategy, then fallback to trades/holdings if necessary
       const chartSymbol = status.active_strategy?.parameters?.symbol || 
-                        status.recent_trades?.[0]?.symbol || 
+                        allTradesForChart?.[0]?.symbol ||
                         status.portfolio_status?.holdings?.[0]?.symbol;
       const chartInterval = "5m"; // Default interval
+
+      // Prepare trades for RealtimeChartDisplay (map to TradeMarkerData)
+      const tradesForChartDisplay: TradeMarkerData[] = allTradesForChart.map(trade => ({
+        symbol: trade.symbol,
+        timestamp: trade.timestamp,
+        type: trade.type,
+        price: trade.price,
+        quantity: trade.quantity,
+        // trade_id and total_value are not in TradeMarkerData, so they are omitted here
+      }));
 
       return (
          <div className="space-y-4"> {/* Outer container for spacing between top and bottom */}
@@ -70,9 +121,9 @@ const SimulationDisplay: React.FC<SimulationDisplayProps> = ({ initialStatus }) 
                         <RealtimeChartDisplay 
                             symbol={chartSymbol} 
                             interval={chartInterval} 
-                            trades={status.recent_trades} // Pass all recent trades
-                            runId={status.run_id} // Pass the run_id
-                            // latestTick can be connected later if needed for sub-minute updates
+                            trades={tradesForChartDisplay}
+                            runId={status.run_id}
+                            latestTick={status.current_kline_for_chart || undefined}
                         />
                     </CardContent>
                 </Card>
@@ -103,20 +154,16 @@ const SimulationDisplay: React.FC<SimulationDisplayProps> = ({ initialStatus }) 
             {/* --- Bottom Row: Holdings & Trades --- */}
             {/* Change grid to simple div with spacing for vertical stacking */}
             <div className="space-y-4">
-                 {/* <div> */} {/* No extra div needed for stacking */} 
-                    <HoldingsTable 
-                      holdings={status.portfolio_status.holdings} 
-                      isLoading={false}
-                      error={null}
-                    />
-                {/* </div> */}
-                {/* <div> */} 
-                    <TradesList 
-                      trades={status.recent_trades} 
-                      isLoading={false}
-                      error={null}
-                    />
-                {/* </div> */}
+                 <HoldingsTable 
+                   holdings={status.portfolio_status.holdings} 
+                   isLoading={false}
+                   error={null}
+                 />
+                <TradesList 
+                  trades={allTradesForChart} 
+                  isLoading={isLoadingAllTrades}
+                  error={errorAllTrades}
+                />
             </div>
          </div>
       );

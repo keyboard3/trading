@@ -49,6 +49,10 @@ fetch-data: check-venv
 	@echo "Running data fetching script (core_engine/data_fetcher.py) (using $(PYTHON_EXEC))..."
 	$(PYTHON_EXEC) -m core_engine.data_fetcher
 
+fetch-historical-data: check-venv
+	@echo "Running data loading script (core_engine/data_loader.py) (using $(PYTHON_EXEC))..."
+	$(PYTHON_EXEC) -m core_engine.data_loader
+
 init-db-load-csv: check-venv
 	@echo "Running data loading script (core_engine/data_loader.py) (using $(PYTHON_EXEC))..."
 	$(PYTHON_EXEC) -m core_engine.data_loader

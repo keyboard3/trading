@@ -86,6 +86,22 @@ const RealtimeChartDisplay: React.FC<RealtimeChartDisplayProps> = ({ symbol, int
           }));
           candlestickSeriesApiRef.current.setData(chartData);
           console.log(`[RealtimeChartDisplay EFFECT] Data loaded and set for ${symbol}@${interval}. Count: ${chartData.length}`);
+          
+          // Apply initial trade markers based on the trades prop available at this point
+          if (trades && trades.length > 0) {
+            const initialMarkers: SeriesMarker<UTCTimestamp>[] = trades.map(trade => ({
+              time: trade.timestamp as UTCTimestamp,
+              position: trade.type === 'BUY' ? 'belowBar' : 'aboveBar',
+              color: trade.type === 'BUY' ? '#26a69a' : '#ef5350',
+              shape: trade.type === 'BUY' ? 'arrowUp' : 'arrowDown',
+              text: `  ${trade.type} @ ${trade.price.toFixed(2)}  `
+            }));
+            candlestickSeriesApiRef.current.setMarkers(initialMarkers);
+            console.log(`[RealtimeChartDisplay EFFECT] Applied initial ${initialMarkers.length} trade markers after historical data load.`);
+          } else {
+            candlestickSeriesApiRef.current.setMarkers([]); // Clear if no trades initially
+          }
+
           if (isActive) setChartState({ isLoading: false, error: null });
         }
       })
@@ -145,7 +161,9 @@ const RealtimeChartDisplay: React.FC<RealtimeChartDisplayProps> = ({ symbol, int
         // console.log("[RealtimeChartDisplay MARKERS] Series API not ready for markers.");
         return;
     }
-
+    // This effect now primarily handles updates to the trades prop *after* initial load.
+    // The initial load of markers is handled after historical klines are fetched.
+    // It's still important to ensure that the 'trades' prop here is comprehensive.
     if (trades && trades.length > 0) {
       const markers: SeriesMarker<UTCTimestamp>[] = trades.map(trade => ({
         time: trade.timestamp as UTCTimestamp,
@@ -157,10 +175,11 @@ const RealtimeChartDisplay: React.FC<RealtimeChartDisplayProps> = ({ symbol, int
       candlestickSeriesApiRef.current.setMarkers(markers);
       // console.log(`[RealtimeChartDisplay MARKERS] Applied ${markers.length} trade markers for ${symbol}@${interval}`);
     } else {
+      // If trades prop becomes empty or undefined, clear markers.
       candlestickSeriesApiRef.current.setMarkers([]);
-      // console.log(`[RealtimeChartDisplay MARKERS] Cleared trade markers for ${symbol}@${interval}`);
+      // console.log(`[RealtimeChartDisplay MARKERS] Cleared trade markers for ${symbol}@${interval} due to empty trades prop.`);
     }
-  }, [trades, candlestickSeriesApiRef.current]);
+  }, [trades]); // Removed candlestickSeriesApiRef.current from dependencies as it might cause too frequent runs if not stable early
 
   return (
     <div ref={chartContainerRef} style={{ width: '100%', height: '400px', position: 'relative' }}>

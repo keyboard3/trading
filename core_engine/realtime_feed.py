@@ -96,6 +96,44 @@ class MockRealtimeDataProvider(RealtimeDataProviderBase):
                         # Use attribute access for logging consistent with namedtuple
                         print(f"MockRealtimeDataProvider: Generated {data_tick.symbol} Tick: Price={data_tick.price:.2f}, Timestamp={time.ctime(data_tick.timestamp)}")
                     
+                    # --- BEGIN: Call Klines Aggregator ---
+                    try:
+                        # This assumes simulation_components is accessible here.
+                        # This might require an import or a passed-in reference.
+                        # For now, assuming it's made available globally/module-level by main_api.py
+                        # This is a simplification; a cleaner approach might involve dependency injection.
+                        from backend.main_api import simulation_components # Attempt to import
+
+                        if simulation_components and simulation_components.get("running"):
+                            klines_aggregator = simulation_components.get("klines_aggregator")
+                            current_chart_interval = simulation_components.get("current_chart_interval_for_aggregator")
+                            
+                            # Ensure we have the aggregator and an interval to update for
+                            if klines_aggregator and current_chart_interval:
+                                # data_tick is a namedtuple: (symbol, timestamp, price)
+                                # The klines_aggregator.update_with_tick expects:
+                                # symbol: str, price: float, timestamp: float, volume: Optional[float], interval_str: str
+                                # MockRealtimeDataProvider currently does not generate volume per tick. We'll pass None or 0.0.
+                                tick_volume = 0.0 # Or None, if aggregator handles None for volume
+                                
+                                if self.verbose:
+                                    print(f"MockRealtimeDataProvider: Updating KlinesAggregator for {data_tick.symbol}@{current_chart_interval} with tick price {data_tick.price:.2f}")
+                                
+                                klines_aggregator.update_with_tick(
+                                    symbol=data_tick.symbol,
+                                    price=data_tick.price,
+                                    timestamp=data_tick.timestamp, # This is already a float unix timestamp
+                                    volume=tick_volume, 
+                                    interval_str=current_chart_interval
+                                )
+                    except ImportError:
+                        if self.verbose:
+                            print("MockRealtimeDataProvider: Could not import simulation_components from backend.main_api. Klines aggregation skipped.")
+                    except Exception as e_agg:
+                        if self.verbose:
+                            print(f"MockRealtimeDataProvider: Error updating KlinesAggregator: {e_agg}")
+                    # --- END: Call Klines Aggregator ---
+
                     # Notify subscribers and log if there are any
                     if symbol in self._subscribers and self._subscribers[symbol]:
                         if self.verbose:

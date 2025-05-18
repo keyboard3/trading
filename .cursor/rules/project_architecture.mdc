@@ -23,7 +23,7 @@ alwaysApply: false
         *   `RealtimeDataProviderBase` (`core_engine/realtime_feed_base.py`): 定义了数据提供者的通用接口，新增 `get_current_price(symbol: str)` 抽象方法。
         *   `MockRealtimeDataProvider` (`core_engine/realtime_feed.py`): 用于生成内部模拟数据的提供者。
         *   `YahooFinanceDataProvider` (`core_engine/realtime_data_providers.py`): 通过 `yfinance` 库从 Yahoo Finance 获取（延迟的）实时市场报价，支持配置轮询间隔。
-        *   (未来: 历史数据接口、其他实时数据源)
+        *   `HistoricalDataProvider` (`core_engine/historical_data_provider.py`): 封装了历史K线数据的获取逻辑，优先从本地数据库读取，当数据不足时能够自动从Yahoo Finance下载并回填到本地数据库。
     *   **策略**: 基类和具体的策略实现。这些策略可以被后端API根据用户请求动态选择、实例化和配置。
         *   `BaseStrategy` (`strategies/base_strategy.py`)
         *   `SimpleMAStrategy` (`strategies/simple_ma_strategy.py` - 用于回测)
@@ -37,11 +37,16 @@ alwaysApply: false
     *   **事件/信号系统**: (目前为隐式，如果需要则正式化) 如 `SignalEvent`, `DataTick` 等结构。
 
     *   **历史K线数据处理 (`core_engine/historical_data_provider.py`)**:
-        *   负责封装从本地数据库 (`market_data.db`) 获取和处理历史K线数据的逻辑，供 `/api/v1/klines/historical` API 使用。
-        *   **数据源与质量**: 采用多表存储策略以保证数据质量：
-            *   `ohlcv_1m_data`: 存储近期的1分钟K线数据，用于高质量的分钟级图表。
-            *   `ohlcv_daily_data`: 存储长期的日线K线数据。
-        *   根据API请求的周期和时间范围，智能选择从分钟表或日线表读取数据，并能基于Pandas进行必要的K线周期重采样。
+        *   负责封装从不同来源获取和处理历史K线数据的逻辑，供 `/api/v1/klines/historical` API 使用。
+        *   **数据源策略**: 
+            *   **本地数据库优先**: 首先尝试从本地SQLite数据库 (`data/market_data.db`) 的 `ohlcv_1m_data` (近期1分钟数据) 或 `ohlcv_daily_data` (长期日线数据) 表中获取数据。
+            *   **Yahoo Finance回退**: 如果本地数据库数据缺失或不足以满足请求（例如，请求100条5分钟K线，但本地1分钟数据不足），系统会自动尝试从Yahoo Finance (`yfinance`库) 下载相应时间范围和周期的原始数据。
+            *   **数据持久化**: 从Yahoo Finance下载的数据会经过格式化（列名处理、时区统一为UTC）后，保存回本地数据库对应的表中（1分钟数据到 `ohlcv_1m_data`，日线数据到 `ohlcv_daily_data`）。保存前会先清除数据库中该时间段内对应交易对的旧有记录，以确保数据一致性。
+        *   **数据质量与重采样**: 
+            *   根据API请求的K线周期和时间范围，智能选择从分钟表或日线表读取基础数据。
+            *   能够基于Pandas对获取的基础数据进行必要的K线周期重采样（例如，从1分钟数据生成5分钟、1小时等周期的K线）。
+            *   处理了从 `yfinance` 获取数据时可能出现的MultiIndex列名问题。
+        *   **并发处理**: 在并发请求可能导致同时写库的情况下，对数据保存时的唯一键冲突 (IntegrityError) 进行了容错处理，允许操作继续，避免整体失败。
 
 2.  **后端 API (`backend/`)**: 一个 FastAPI 应用程序，用于暴露核心引擎的功能并为前端提供数据。
     *   **主应用程序**: `backend/main_api.py`

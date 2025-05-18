@@ -116,6 +116,35 @@ class YahooFinanceDataProvider(RealtimeDataProviderBase):
                 if data_tick:
                     with self._lock:
                         self._current_prices[symbol] = data_tick.price
+                        # --- BEGIN: Call Klines Aggregator ---
+                        try:
+                            from backend.main_api import simulation_components # Attempt to import
+
+                            if simulation_components and simulation_components.get("running"):
+                                klines_aggregator = simulation_components.get("klines_aggregator")
+                                current_chart_interval = simulation_components.get("current_chart_interval_for_aggregator")
+                                
+                                if klines_aggregator and current_chart_interval:
+                                    tick_volume = 0.0 # Assuming no per-tick volume from yf.Ticker().info easily.
+
+                                    if self.verbose:
+                                        print(f"{LogColors.OKBLUE}YahooFinanceDataProvider: Updating KlinesAggregator for {data_tick.symbol}@{current_chart_interval} with tick price {data_tick.price:.2f}{LogColors.ENDC}")
+                                    
+                                    klines_aggregator.update_with_tick(
+                                        symbol=data_tick.symbol,
+                                        price=data_tick.price,
+                                        timestamp=data_tick.timestamp,
+                                        volume=tick_volume,
+                                        interval_str=current_chart_interval
+                                    )
+                        except ImportError:
+                            if self.verbose:
+                                print(f"{LogColors.WARNING}YahooFinanceDataProvider: Could not import simulation_components from backend.main_api. Klines aggregation skipped.{LogColors.ENDC}")
+                        except Exception as e_agg:
+                            if self.verbose:
+                                print(f"{LogColors.FAIL}YahooFinanceDataProvider: Error updating KlinesAggregator: {e_agg}{LogColors.ENDC}")
+                        # --- END: Call Klines Aggregator ---
+                        
                         if symbol in self._subscribers:
                             for callback in self._subscribers[symbol]:
                                 try:

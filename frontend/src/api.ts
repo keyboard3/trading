@@ -4,6 +4,7 @@ import type {
   StartSimulationRequest,
   // BackendResponseMessage, // This type doesn't exist, use { message: string } inline or create it
   KLineData,
+  ApiTradeRecord,
 } from './types';
 
 const API_BASE_URL = 'http://localhost:8089'; // Assuming backend runs on port 8089
@@ -114,6 +115,31 @@ export async function resumeSimulation(): Promise<{ message: string }> {
     return await response.json();
   } catch (error) {
     console.error('Error resuming simulation:', error);
+    throw error;
+  }
+}
+
+export async function fetchAllTradesForRun(runId: string): Promise<ApiTradeRecord[]> {
+  if (!runId) {
+    console.warn("fetchAllTradesForRun called with no runId. Returning empty array.");
+    return Promise.resolve([]);
+  }
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/simulation/trades/${runId}`);
+    if (!response.ok) {
+      let errorDetail = `HTTP error! status: ${response.status}`;
+      try {
+        const errorData = await response.json();
+        if (errorData && errorData.detail) {
+          errorDetail = typeof errorData.detail === 'string' ? errorData.detail : JSON.stringify(errorData.detail);
+        }
+      } catch (e) { /* Ignore if error body is not json */ }
+      throw new Error(errorDetail);
+    }
+    const data: ApiTradeRecord[] = await response.json();
+    return data;
+  } catch (error) {
+    console.error(`Failed to fetch all trades for runId ${runId}:`, error);
     throw error;
   }
 }

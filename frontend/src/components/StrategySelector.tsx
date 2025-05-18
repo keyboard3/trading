@@ -1,12 +1,23 @@
 import React, { useState, useEffect } from 'react';
 
 // 预期的单个策略对象结构
+export interface StrategyParameter { // Representing a single parameter's config
+  type: string;
+  default: any;
+  min?: number;
+  max?: number;
+  step?: number;
+  label_cn: string;
+  options?: { label: string; value: any }[]; // For select/radio types if you add them later
+}
+
 export interface Strategy {
   id: string;
-  name: string;
+  name: string; // Display Name
   description?: string;
-  default_params: Record<string, any>;
-  param_grid?: Record<string, any[]>;
+  parameters: Record<string, StrategyParameter>; // Full parameter definitions from API
+  default_params: Record<string, any>; // Extracted default values { paramName: defaultValue }
+  // param_grid?: Record<string, any[]>; // If you use this later
 }
 
 // StrategySelector 组件的 Props
@@ -32,24 +43,41 @@ const StrategySelector: React.FC<StrategySelectorProps> = ({ selectedStrategyId,
         const apiResponseData: Record<string, any> = await response.json();
         console.log('Raw data from API:', apiResponseData);
 
-        const knownMetadataKeys = ['module_name', 'function_name', 'param_grid', 'indicator_cols', 'display_name', 'description'];
+        // const knownMetadataKeys = ['module_name', 'function_name', 'param_grid', 'indicator_cols', 'display_name', 'description']; // Not needed for default_params extraction
 
         const transformedStrategies: Strategy[] = Object.keys(apiResponseData).map(id => {
-          const apiConfig = apiResponseData[id];
+          const apiConfig = apiResponseData[id]; // This is the strategy object from the API
           
           const defaultParams: Record<string, any> = {};
-          for (const key in apiConfig) {
-            if (Object.prototype.hasOwnProperty.call(apiConfig, key) && !knownMetadataKeys.includes(key)) {
-              defaultParams[key] = apiConfig[key];
+          const strategySpecificParameters: Record<string, StrategyParameter> = {};
+
+          if (apiConfig.parameters && typeof apiConfig.parameters === 'object') {
+            for (const paramName in apiConfig.parameters) {
+              if (Object.prototype.hasOwnProperty.call(apiConfig.parameters, paramName)) {
+                const paramConfig = apiConfig.parameters[paramName];
+                if (paramConfig && typeof paramConfig === 'object' && 'default' in paramConfig) {
+                  defaultParams[paramName] = paramConfig.default;
+                  strategySpecificParameters[paramName] = paramConfig as StrategyParameter;
+                } else {
+                  // Handle cases where a parameter might not have a default, or structure is unexpected
+                  console.warn(`Parameter ${paramName} for strategy ${id} has no default value or unexpected structure.`);
+                  // defaultParams[paramName] = ''; // Or some other fallback
+                  // If paramConfig exists but no default, still add to strategySpecificParameters
+                  if (paramConfig && typeof paramConfig === 'object') {
+                    strategySpecificParameters[paramName] = paramConfig as StrategyParameter;
+                  }
+                }
+              }
             }
           }
 
           return {
-            id: id,
-            name: apiConfig.display_name || id,
+            id: id, // This is the internal strategy name, e.g., "BYDTrendFollowingStrategy"
+            name: apiConfig.display_name || id, // This is the display name
             description: apiConfig.description || `策略 ${id}`,
-            default_params: defaultParams,
-            param_grid: apiConfig.param_grid || {}
+            default_params: defaultParams, // Now correctly populated
+            parameters: strategySpecificParameters, // This will be used by ParametersForm
+            // param_grid: apiConfig.param_grid || {} // param_grid is not in your API response from earlier
           };
         });
         

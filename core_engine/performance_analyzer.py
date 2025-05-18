@@ -198,29 +198,69 @@ def plot_strategy_on_price(
 
     fig, ax = plt.subplots(figsize=(14, 7))
 
-    ax.plot(stock_data.index, stock_data[close_col], label=f'{symbol_to_plot} {close_col.capitalize()}', alpha=0.9, color='black')
+    # Plot close price on the primary y-axis
+    line1, = ax.plot(stock_data.index, stock_data[close_col], label=f'{symbol_to_plot} {close_col.capitalize()}', alpha=0.9, color='black')
+    ax.set_xlabel('Date')
+    ax.set_ylabel('Price', color='black')
+    ax.tick_params(axis='y', labelcolor='black')
+
+    lines_for_legend = [line1]
+    ax2 = None # Initialize secondary axis
 
     if indicator_cols:
-        for i, indicator_name in enumerate(indicator_cols):
-            if indicator_name in stock_data.columns:
-                ax.plot(stock_data.index, stock_data[indicator_name], 
-                        label=f'{indicator_name.upper()} ({strategy_name})', linestyle='--', alpha=0.7)
+        # Separate volume-related indicators
+        price_indicators = []
+        volume_indicators = []
+        for indicator_name in indicator_cols:
+            if 'volume' in indicator_name.lower(): # Heuristic for volume indicators
+                volume_indicators.append(indicator_name)
             else:
-                print(f"Warning: Indicator column '{indicator_name}' not found in data, cannot plot.")
-                print(f"警告：指标列 '{indicator_name}' 在数据中未找到，无法绘制。")
+                price_indicators.append(indicator_name)
+
+        for indicator_name in price_indicators:
+            if indicator_name in stock_data.columns:
+                line, = ax.plot(stock_data.index, stock_data[indicator_name], 
+                                label=f'{indicator_name.upper()} ({strategy_name})', linestyle='--', alpha=0.7)
+                lines_for_legend.append(line)
+            else:
+                print(f"Warning: Price indicator column '{indicator_name}' not found in data, cannot plot.")
+
+        if volume_indicators:
+            if ax2 is None:
+                ax2 = ax.twinx() # Create secondary y-axis only if needed
+            
+            for indicator_name in volume_indicators:
+                if indicator_name in stock_data.columns:
+                    # Choose a distinct color for volume indicators if needed, or let matplotlib cycle
+                    line, = ax2.plot(stock_data.index, stock_data[indicator_name], 
+                                     label=f'{indicator_name.upper()} ({strategy_name})', linestyle=':', alpha=0.6, color='blue') # Example: dotted blue
+                    lines_for_legend.append(line)
+                else:
+                    print(f"Warning: Volume indicator column '{indicator_name}' not found in data, cannot plot.")
+            ax2.set_ylabel('Volume', color='blue') # Label for secondary y-axis
+            ax2.tick_params(axis='y', labelcolor='blue')
 
     buy_signals = stock_data[stock_data[signal_col] == 1]
     if not buy_signals.empty:
-        ax.scatter(buy_signals.index, buy_signals[close_col], label='Buy Signal', marker='^', color='green', s=150, zorder=5)
+        scatter_buy = ax.scatter(buy_signals.index, buy_signals[close_col], label='Buy Signal', marker='^', color='green', s=150, zorder=5)
+        # lines_for_legend.append(scatter_buy) # Scatter plots are often handled differently in legends
 
     sell_signals = stock_data[stock_data[signal_col] == -1]
     if not sell_signals.empty:
-        ax.scatter(sell_signals.index, sell_signals[close_col], label='Sell Signal', marker='v', color='red', s=150, zorder=5)
+        scatter_sell = ax.scatter(sell_signals.index, sell_signals[close_col], label='Sell Signal', marker='v', color='red', s=150, zorder=5)
+        # lines_for_legend.append(scatter_sell) # Scatter plots are often handled differently in legends
 
-    ax.set_title(title) # Title is passed from main.py, ensure it's English there
-    ax.set_xlabel('Date')
-    ax.set_ylabel('Price')
-    ax.legend()
+    ax.set_title(title)
+    # ax.set_xlabel('Date') # Already set
+    # ax.set_ylabel('Price') # Already set for primary axis
+    
+    # Combine legends from both axes
+    # labels_for_legend = [l.get_label() for l in lines_for_legend]
+    # ax.legend(lines_for_legend, labels_for_legend, loc='best')
+    # A simpler way to handle legends from multiple axes if they don't overlap too much in content:
+    fig.legend(loc="upper left", bbox_to_anchor=(0.1,0.9))
+
+
     ax.grid(True)
 
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))

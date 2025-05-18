@@ -65,14 +65,13 @@ try:
     from core_engine.trading_engine import MockTradingEngine, SignalEvent, TradeRecord # SignalEvent/TradeRecord for Pydantic models
     from core_engine.realtime_feed import MockRealtimeDataProvider
     from core_engine.realtime_data_providers import YahooFinanceDataProvider
-    from strategies.simple_ma_strategy import RealtimeSimpleMAStrategy
-    from strategies.realtime_rsi_strategy import RealtimeRSIStrategy # Add import for RSI strategy
     from core_engine.risk_manager import RiskAlert # Import RiskAlert
     from core_engine.historical_data_provider import fetch_historical_klines_core # <--- ADD THIS IMPORT
     from core_engine.realtime_klines_aggregator import RealtimeKlinesAggregator, KLineData as AggregatorKLineData 
+    from core_engine.strategy_factory import get_available_strategies as get_available_backtest_strategies, get_strategy_class
 except ImportError as e:
-    print(f"Error importing from main.py or core_engine: {e}")
-    # Fallbacks (existing + new for simulation components)
+    print(f"{LogColors.WARNING}Warning: Initial import from main.py or core_engine failed. Using fallbacks. Details: {e}{LogColors.ENDC}")
+    # Fallbacks (These will be used if imports fail)
     MAIN_STRATEGY_CONFIG = {"ERROR": {"description": "Failed to load STRATEGY_CONFIG from main.py"}}
     MAIN_RESULTS_DIR = "results_fallback" 
     def main_init_db(): print("Warning: main_init_db not loaded.")
@@ -82,17 +81,16 @@ except ImportError as e:
     DEFAULT_SLIPPAGE_PCT = 0.001
     def execute_single_backtest_run(*args, **kwargs): 
         return {"error": "execute_single_backtest_run not loaded"}
-    # Fallbacks for simulation components if imports fail
     MockPortfolio = None
     MockTradingEngine = None
-    MockRealtimeDataProvider = None
-    RealtimeSimpleMAStrategy = None
-    RealtimeRSIStrategy = None # Add fallback for RSI strategy
-    SignalEvent = Dict # Fallback type
-    TradeRecord = Dict # Fallback type
-    RiskAlert = Any # Fallback type for RiskAlert
+    SignalEvent = Dict
+    TradeRecord = Dict
+    RiskAlert = Any
     RealtimeKlinesAggregator = None 
     AggregatorKLineData = Dict 
+    def get_available_backtest_strategies(): 
+        return {"ERROR": {"description": "Failed to load get_available_backtest_strategies"}}
+    def get_strategy_class(strategy_name: str): return None # Fallback for get_strategy_class
 
 
 # Remove the local, simplified STRATEGY_CONFIG
@@ -234,37 +232,37 @@ class StartSimulationRequest(BaseModel):
 # In the future, this could be populated by scanning a directory or a config file
 
 # Ensure RealtimeSimpleMAStrategy is imported
-if RealtimeSimpleMAStrategy is None:
-    print("CRITICAL: RealtimeSimpleMAStrategy not imported. Strategy switching will not work for MA.")
-if RealtimeRSIStrategy is None: # Check for RSI strategy import
-    print("CRITICAL: RealtimeRSIStrategy not imported. Strategy switching will not work for RSI.")
+# if RealtimeSimpleMAStrategy is None:
+#     print("CRITICAL: RealtimeSimpleMAStrategy not imported. Strategy switching will not work for MA.")
+# if RealtimeRSIStrategy is None: # Check for RSI strategy import
+#     print("CRITICAL: RealtimeRSIStrategy not imported. Strategy switching will not work for RSI.")
 
 STRATEGY_REGISTRY: Dict[str, AvailableStrategy] = {}
 
-if RealtimeSimpleMAStrategy is not None:
-    STRATEGY_REGISTRY["realtime_simple_ma"] = AvailableStrategy(
-        id="realtime_simple_ma",
-        name="实时简单移动平均线策略",
-        description="一个简单的实时交易策略，使用两条移动平均线的交叉来产生买入/卖出信号。",
-        parameters=[
-            StrategyParameterSpec(name="symbol", type="str", required=True, default="MSFT", description="要交易的股票代码 (例如: \'SIM_STOCK_A\')"),
-            StrategyParameterSpec(name="short_window", type="int", required=True, default=5, description="短期移动平均线的窗口大小"),
-            StrategyParameterSpec(name="long_window", type="int", required=True, default=10, description="长期移动平均线的窗口大小"),
-        ]
-    )
+# if RealtimeSimpleMAStrategy is not None:
+#     STRATEGY_REGISTRY["realtime_simple_ma"] = AvailableStrategy(
+#         id="realtime_simple_ma",
+#         name="实时简单移动平均线策略",
+#         description="一个简单的实时交易策略，使用两条移动平均线的交叉来产生买入/卖出信号。",
+#         parameters=[
+#             StrategyParameterSpec(name="symbol", type="str", required=True, default="MSFT", description="要交易的股票代码 (例如: \'SIM_STOCK_A\')"),
+#             StrategyParameterSpec(name="short_window", type="int", required=True, default=5, description="短期移动平均线的窗口大小"),
+#             StrategyParameterSpec(name="long_window", type="int", required=True, default=10, description="长期移动平均线的窗口大小"),
+#         ]
+#     )
 
-if RealtimeRSIStrategy is not None: # Add RSI strategy to registry
-    STRATEGY_REGISTRY["realtime_rsi"] = AvailableStrategy(
-        id="realtime_rsi",
-        name="实时RSI震荡策略",
-        description="根据相对强弱指数 (RSI) 在超买超卖区域的交叉产生交易信号。",
-        parameters=[
-            StrategyParameterSpec(name="symbol", type="str", required=True, default="MSFT", description="要交易的股票代码 (例如: \'SIM_STOCK_B\')"),
-            StrategyParameterSpec(name="period", type="int", required=True, default=14, description="RSI 计算周期长度"),
-            StrategyParameterSpec(name="oversold_threshold", type="float", required=True, default=30.0, description="RSI 超卖阈值"),
-            StrategyParameterSpec(name="overbought_threshold", type="float", required=True, default=70.0, description="RSI 超买阈值"),
-        ]
-    )
+# if RealtimeRSIStrategy is not None: # Add RSI strategy to registry
+#     STRATEGY_REGISTRY["realtime_rsi"] = AvailableStrategy(
+#         id="realtime_rsi",
+#         name="实时RSI震荡策略",
+#         description="根据相对强弱指数 (RSI) 在超买超卖区域的交叉产生交易信号。",
+#         parameters=[
+#             StrategyParameterSpec(name="symbol", type="str", required=True, default="MSFT", description="要交易的股票代码 (例如: \'SIM_STOCK_B\')"),
+#             StrategyParameterSpec(name="period", type="int", required=True, default=14, description="RSI 计算周期长度"),
+#             StrategyParameterSpec(name="oversold_threshold", type="float", required=True, default=30.0, description="RSI 超卖阈值"),
+#             StrategyParameterSpec(name="overbought_threshold", type="float", required=True, default=70.0, description="RSI 超买阈值"),
+#         ]
+#     )
 
 # Add more strategies here as they are developed
 
@@ -550,12 +548,8 @@ class BacktestRequest(BaseModel):
 
 @app.get("/api/v1/strategies")
 async def get_strategies():
-    """获取所有可用策略及其配置信息"""
-    if "ERROR" in MAIN_STRATEGY_CONFIG:
-         raise HTTPException(status_code=500, detail="Strategy configuration could not be loaded.")
-    # Return a "cleaned" version suitable for API (e.g., without function objects if any were there)
-    # Our STRATEGY_CONFIG from main.py is already clean (uses module/function names)
-    return MAIN_STRATEGY_CONFIG
+    # return MAIN_STRATEGY_CONFIG # Old way
+    return get_available_backtest_strategies() # New way, using the factory
 
 @app.get("/")
 async def read_root():
@@ -563,84 +557,95 @@ async def read_root():
 
 @app.post("/api/v1/backtest/run")
 async def run_backtest_api(request: BacktestRequest):
-    """
-    接收回测请求，为每个股票代码触发核心回测引擎，并返回结果链接。
-    """
-    print(f"接收到API回测请求 for strategy {request.strategy_id} on symbols: {request.tickers}")
+    print(f"{LogColors.OKBLUE}Received API backtest request for strategy {request.strategy_id} on symbols: {request.tickers}{LogColors.ENDC}")
 
-    if request.strategy_id not in MAIN_STRATEGY_CONFIG:
+    # Validate strategy using the strategy factory
+    strategy_class = get_strategy_class(request.strategy_id)
+    if not strategy_class:
+        print(f"{LogColors.FAIL}Strategy '{request.strategy_id}' not found via get_strategy_class from factory.{LogColors.ENDC}")
         raise HTTPException(status_code=404, detail=f"Strategy '{request.strategy_id}' not found.")
-    
-    selected_strategy_config_details = MAIN_STRATEGY_CONFIG[request.strategy_id]
 
-    # Create a unique directory for this API run
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    unique_id = uuid.uuid4().hex[:8]
-    # Sanitize strategy_id and first symbol for a more readable directory name
-    safe_strategy_id = "".join(c if c.isalnum() else "_" for c in request.strategy_id)
-    safe_first_symbol = "".join(c if c.isalnum() else "_" for c in request.tickers[0]) if request.tickers else "multi"
-    
-    run_tag = f"{safe_strategy_id}_{safe_first_symbol}_{timestamp}_{unique_id}"
-    
-    current_api_run_results_dir = os.path.join(MAIN_RESULTS_DIR, API_RUNS_SUBDIR_NAME, run_tag)
-    
+    # The old MAIN_STRATEGY_CONFIG and selected_strategy_config_details are no longer needed here
+    # as parameters are passed directly from the request and strategy class is fetched from factory.
+
     try:
-        os.makedirs(current_api_run_results_dir, exist_ok=True)
-        print(f"Created results directory for API run: {current_api_run_results_dir}")
-    except OSError as e:
-        print(f"Error creating directory {current_api_run_results_dir}: {e}")
-        raise HTTPException(status_code=500, detail=f"Could not create results directory on server: {e}")
+        # Validate dates
+        # ... existing validation code ...
 
-    all_symbol_results = []
-
-    for symbol_to_run in request.tickers:
-        print(f"  Processing symbol: {symbol_to_run} for strategy: {request.strategy_id}")
+        # Create a unique directory for this API run
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = uuid.uuid4().hex[:8]
+        # Sanitize strategy_id and first symbol for a more readable directory name
+        safe_strategy_id = "".join(c if c.isalnum() else "_" for c in request.strategy_id)
+        safe_first_symbol = "".join(c if c.isalnum() else "_" for c in request.tickers[0]) if request.tickers else "multi"
         
-        # Call the core backtest execution function from main.py
+        run_tag = f"{safe_strategy_id}_{safe_first_symbol}_{timestamp}_{unique_id}"
+        
+        current_api_run_results_dir = os.path.join(MAIN_RESULTS_DIR, API_RUNS_SUBDIR_NAME, run_tag)
+        
         try:
-            single_run_result = execute_single_backtest_run(
-                symbol=symbol_to_run,
-                strategy_id=request.strategy_id,
-                strategy_specific_params=request.parameters,
-                selected_strategy_config=selected_strategy_config_details,
-                results_output_dir=current_api_run_results_dir, # Pass the unique dir for this API run
-                start_date=request.start_date,
-                end_date=request.end_date,
-                initial_capital=request.initial_capital,
-                commission_rate_pct=request.commission_rate_pct,
-                min_commission_per_trade=request.min_commission_per_trade,
-                slippage_pct=request.slippage_pct if request.slippage_pct is not None else DEFAULT_SLIPPAGE_PCT
-            )
-        except Exception as e_exec:
-            print(f"Exception during execute_single_backtest_run for {symbol_to_run}: {e_exec}")
-            single_run_result = {"error": f"Execution failed for {symbol_to_run}: {str(e_exec)}", "metrics": None}
+            os.makedirs(current_api_run_results_dir, exist_ok=True)
+            print(f"Created results directory for API run: {current_api_run_results_dir}")
+        except OSError as e:
+            print(f"Error creating directory {current_api_run_results_dir}: {e}")
+            raise HTTPException(status_code=500, detail=f"Could not create results directory on server: {e}")
+
+        all_symbol_results = []
+
+        for symbol_to_run in request.tickers:
+            print(f"  Processing symbol: {symbol_to_run} for strategy: {request.strategy_id}")
+            
+            # Call the core backtest execution function from main.py
+            try:
+                backtest_args = {
+                    "symbol": symbol_to_run,
+                    "strategy_id": request.strategy_id,
+                    "start_date": request.start_date,
+                    "end_date": request.end_date,
+                    "initial_capital": request.initial_capital,
+                    "strategy_specific_params": request.parameters,
+                    "results_output_dir": current_api_run_results_dir,
+                    "commission_rate_pct": request.commission_rate_pct,
+                    "min_commission_per_trade": request.min_commission_per_trade,
+                    "slippage_pct": request.slippage_pct
+                }
+                
+                print(f"{LogColors.OKBLUE}Calling execute_single_backtest_run for {symbol_to_run} with args: {backtest_args}{LogColors.ENDC}")
+                single_run_result = execute_single_backtest_run(**backtest_args)
+            except Exception as e_exec:
+                print(f"Exception during execute_single_backtest_run for {symbol_to_run}: {e_exec}")
+                single_run_result = {"error": f"Execution failed for {symbol_to_run}: {str(e_exec)}", "metrics": None}
 
 
-        # Construct web-accessible URLs for report and charts if paths are returned
-        api_accessible_result = {
-            "ticker": symbol_to_run,
-            "metrics": single_run_result.get("metrics"),
-            "error": single_run_result.get("error"),
-            "report_url": None,
-            "portfolio_value_chart_url": None,
-            "strategy_chart_url": None,
+            # Construct web-accessible URLs for report and charts if paths are returned
+            api_accessible_result = {
+                "ticker": symbol_to_run,
+                "metrics": single_run_result.get("metrics"),
+                "error": single_run_result.get("error"),
+                "report_url": None,
+                "portfolio_value_chart_url": None,
+                "strategy_chart_url": None,
+            }
+
+            if single_run_result.get("report_path"):
+                api_accessible_result["report_url"] = f"{API_RESULTS_MOUNT_PATH}/{run_tag}/{single_run_result['report_path']}"
+            if single_run_result.get("portfolio_value_chart_path"):
+                api_accessible_result["portfolio_value_chart_url"] = f"{API_RESULTS_MOUNT_PATH}/{run_tag}/{single_run_result['portfolio_value_chart_path']}"
+            if single_run_result.get("strategy_chart_path"):
+                api_accessible_result["strategy_chart_url"] = f"{API_RESULTS_MOUNT_PATH}/{run_tag}/{single_run_result['strategy_chart_path']}"
+            
+            all_symbol_results.append(api_accessible_result)
+
+        return {
+            "message": f"Backtest processing completed for strategy '{request.strategy_id}'.",
+            "run_id_tag": run_tag, # Useful for client to find results folder if needed
+            "results_base_url": f"{API_RESULTS_MOUNT_PATH}/{run_tag}/", # Base URL for this run's artifacts
+            "results_per_symbol": all_symbol_results
         }
 
-        if single_run_result.get("report_path"):
-            api_accessible_result["report_url"] = f"{API_RESULTS_MOUNT_PATH}/{run_tag}/{single_run_result['report_path']}"
-        if single_run_result.get("portfolio_value_chart_path"):
-            api_accessible_result["portfolio_value_chart_url"] = f"{API_RESULTS_MOUNT_PATH}/{run_tag}/{single_run_result['portfolio_value_chart_path']}"
-        if single_run_result.get("strategy_chart_path"):
-            api_accessible_result["strategy_chart_url"] = f"{API_RESULTS_MOUNT_PATH}/{run_tag}/{single_run_result['strategy_chart_path']}"
-        
-        all_symbol_results.append(api_accessible_result)
-
-    return {
-        "message": f"Backtest processing completed for strategy '{request.strategy_id}'.",
-        "run_id_tag": run_tag, # Useful for client to find results folder if needed
-        "results_base_url": f"{API_RESULTS_MOUNT_PATH}/{run_tag}/", # Base URL for this run's artifacts
-        "results_per_symbol": all_symbol_results
-    }
+    except Exception as e:
+        print(f"{LogColors.FAIL}Error during backtest execution: {e}{LogColors.ENDC}")
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):

@@ -54,7 +54,7 @@ function App() {
   const [backtestApiError, setBacktestApiError] = useState<string | null>(null)
 
   // --- Tab and Simulation Shared States ---
-  const [activeTab, setActiveTab] = useState<'backtest' | 'simulation'>('simulation');
+  const [activeTab, setActiveTab] = useState<'backtest' | 'simulation'>('backtest');
   const [isSimulationRunningForControlPanel, setIsSimulationRunningForControlPanel] = useState<boolean>(false);
   const [currentStrategyNameForControlPanel, setCurrentStrategyNameForControlPanel] = useState<string | null>(null);
   const [refreshSimDisplayKey, setRefreshSimDisplayKey] = useState<number>(0);

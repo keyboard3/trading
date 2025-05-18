@@ -17,6 +17,7 @@ import itertools # <<< 导入itertools用于生成参数组合
 import shutil # <<< 新增导入 shutil 用于删除目录树
 import ast # 用于安全地评估字符串为Python对象
 import importlib # <<< 新增导入 importlib
+from core_engine.strategy_factory import get_strategy_class # Added for new strategy loading
 
 # --- 策略配置 --- 
 # 用户可以在这里选择要运行的策略和配置其参数
@@ -76,23 +77,10 @@ DEFAULT_SLIPPAGE_PCT = 0.0001 # 默认滑点百分比: 0.01% (万分之一)
 RESULTS_DIR = "results" # 顶层结果目录
 CURRENT_RUN_TAG = "Phase3_UI_Dev_Data" # <<< 更新：反映当前为阶段三UI开发准备数据
 
-def get_strategy_function(module_name: str, function_name: str):
-    """动态导入并返回策略函数。"""
-    try:
-        module = importlib.import_module(module_name)
-        return getattr(module, function_name)
-    except ImportError:
-        print(f"错误：无法导入策略模块 '{module_name}'。")
-        return None
-    except AttributeError:
-        print(f"错误：在模块 '{module_name}' 中未找到策略函数 '{function_name}'。")
-        return None
-
 def execute_single_backtest_run(
     symbol: str,
-    strategy_id: str, # 例如 'RSI'
-    strategy_specific_params: dict, # 例如 {'period': 14, ...}
-    selected_strategy_config: dict, # STRATEGY_CONFIG[strategy_id] 的内容
+    strategy_id: str, # 例如 'BYDTrendFollowingStrategy'
+    strategy_specific_params: dict, # 例如 {'short_ma_period': 20, ...}
     results_output_dir: str, # 结果保存的特定目录
     start_date: str = None, # 使用全局默认值或API提供的值
     end_date: str = None,
@@ -103,11 +91,11 @@ def execute_single_backtest_run(
 ) -> dict:
     """
     执行单次回测（单个股票，单个参数集），并返回结果。
+    Uses class-based strategy factory.
     """
-    print(f"\n\n{'='*20} 开始执行单次回测: {strategy_id} on {symbol} with {strategy_specific_params} {'='*20}")
+    print(f"\n\n{'='*20} 开始执行单次回测 (class-based): {strategy_id} on {symbol} with {strategy_specific_params} {'='*20}")
     print(f"结果将保存到: {results_output_dir}")
 
-    # 初始化返回字典
     run_result = {
         "metrics": None,
         "report_path": None,
@@ -116,16 +104,14 @@ def execute_single_backtest_run(
         "error": None
     }
 
-    strategy_function = get_strategy_function(
-        selected_strategy_config['module_name'], 
-        selected_strategy_config['function_name']
-    )
-    if not strategy_function:
-        run_result["error"] = f"无法加载策略函数 {selected_strategy_config['module_name']}.{selected_strategy_config['function_name']}"
+    StrategyClass = get_strategy_class(strategy_id)
+    if not StrategyClass:
+        error_msg = f"无法通过工厂加载策略类: {strategy_id}"
+        print(error_msg)
+        run_result["error"] = error_msg
         return run_result
 
-    # 1. 加载数据
-    print(f"\n--- 1.1 为 {symbol} 加载数据 ---")
+    print(f"--- 1.1 为 {symbol} 加载数据 ---")
     market_data_for_symbol = load_data_from_db(symbols=[symbol], start_date=start_date, end_date=end_date)
     if market_data_for_symbol is None or market_data_for_symbol.empty:
         error_msg = f"数据库中未找到股票 {symbol} 的数据。"
@@ -134,17 +120,45 @@ def execute_single_backtest_run(
         return run_result
     print(f"成功为 {symbol} 从数据库加载 {len(market_data_for_symbol)} 条数据。")
 
-    # 2. 生成信号
     print(f"\n--- 1.2 为 {symbol} 生成交易信号 ({strategy_id}策略) ---")
-    data_with_signals = strategy_function(
-        market_data_for_symbol.copy(),
-        **strategy_specific_params
-    )
-    if data_with_signals is None or data_with_signals.empty or 'signal' not in data_with_signals.columns:
-        error_msg = f"为 {symbol} 生成信号失败或结果为空/不含signal列。"
-        print(error_msg)
+    try:
+        strategy_instance = StrategyClass(
+            params=strategy_specific_params, 
+            data=market_data_for_symbol.copy(),
+            initial_capital=initial_capital
+        )
+        
+        signals_series = strategy_instance._generate_signals()
+        
+        if signals_series is None or not isinstance(signals_series, pd.Series):
+            if signals_series is None:
+                error_msg = f"为 {symbol} 使用策略 {strategy_id} 生成信号时返回了 None。"
+                print(error_msg)
+                run_result["error"] = error_msg
+                return run_result
+            print(f"策略 {strategy_id} 在 {symbol} 上未生成任何交易信号。")
+            data_with_signals = strategy_instance.data.copy()
+            data_with_signals['signal'] = 0
+            data_with_signals['signal'] = data_with_signals['signal'].astype(int)
+        else:
+            data_with_signals = strategy_instance.data.join(signals_series.rename('signal'))
+            if 'signal' not in data_with_signals.columns:
+                 data_with_signals['signal'] = 0
+            data_with_signals['signal'] = data_with_signals['signal'].fillna(0).astype(int)
+
+        if 'signal' not in data_with_signals.columns:
+            error_msg = f"为 {symbol} 生成信号后，'signal' 列丢失。"
+            print(error_msg)
+            run_result["error"] = error_msg
+            return run_result
+            
+    except Exception as e_strat:
+        import traceback
+        error_msg = f"策略 {strategy_id} 实例化或信号生成时出错: {e_strat}"
+        print(f"{error_msg}\n{traceback.format_exc()}")
         run_result["error"] = error_msg
         return run_result
+    
     print(f"股票 {symbol} 的交易信号已生成。")
 
     # 3. 执行回测
@@ -216,7 +230,20 @@ def execute_single_backtest_run(
 
     # 6. 绘制并保存单个股票的策略示意图 (使用英文标题)
     print(f"\n--- 1.6 For {symbol}: Plotting Strategy Visualization ---")
-    indicator_cols_for_plot = selected_strategy_config.get('indicator_cols', [])
+    # StrategyClass = get_strategy_class(strategy_id) # No need to get class again, we have instance
+    # if StrategyClass:
+    #     strategy_info = StrategyClass.get_info()
+    #     indicator_cols_for_plot = strategy_info.get('indicator_columns', [])
+    # else:
+    #     indicator_cols_for_plot = []
+    #     print(f"警告: 无法再次获取策略类 {strategy_id} 来提取指标列信息。")
+
+    if hasattr(strategy_instance, 'generated_indicator_columns'):
+        indicator_cols_for_plot = strategy_instance.generated_indicator_columns
+    else:
+        indicator_cols_for_plot = []
+        print(f"警告: 策略实例 {strategy_id} 没有 'generated_indicator_columns' 属性。")
+
     actual_indicator_cols_present = [col for col in indicator_cols_for_plot if col in data_with_signals.columns]
 
     if actual_indicator_cols_present:
@@ -302,7 +329,6 @@ def main():
                 symbol=symbol_to_run,
                 strategy_id=SELECTED_STRATEGY,
                 strategy_specific_params=current_strategy_specific_params,
-                selected_strategy_config=current_strategy_config_details,
                 results_output_dir=main_run_specific_results_dir, # main() 使用其自己的结果目录
                 start_date=START_DATE, # Global defaults
                 end_date=END_DATE,

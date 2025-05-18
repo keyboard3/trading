@@ -6,16 +6,6 @@ interface ParametersFormProps {
   onParametersChange: (params: Record<string, any>) => void; 
 }
 
-// 中文标签映射
-const paramTranslations: Record<string, string> = {
-  period: '周期',
-  oversold_threshold: '超卖阈值',
-  overbought_threshold: '超买阈值',
-  short_window: '短期均线',
-  long_window: '长期均线',
-  // 可根据需要添加更多参数的中文名称
-};
-
 const ParametersForm: React.FC<ParametersFormProps> = ({ strategy, onParametersChange }) => {
   const [currentParams, setCurrentParams] = useState<Record<string, any>>({});
 
@@ -57,23 +47,22 @@ const ParametersForm: React.FC<ParametersFormProps> = ({ strategy, onParametersC
       <h3 className="text-lg font-semibold text-gray-900 mb-4">策略参数配置:</h3>
       <div className="flex flex-col gap-4">
         {paramKeys.map((paramName) => {
+          const paramConfig = strategy.parameters?.[paramName];
           const defaultValue = strategyParams[paramName];
-          // 根据默认值的类型决定输入框类型，对布尔类型使用checkbox（如果需要）
+          
           let inputType = 'text';
           if (typeof defaultValue === 'number') inputType = 'number';
-          // if (typeof defaultValue === 'boolean') inputType = 'checkbox'; // 示例：未来可支持
 
-          const englishLabel = paramName.replace(/_/g, ' ');
-          const chineseLabel = paramTranslations[paramName] || '';
+          // 使用策略定义中的 label_cn，如果不存在则回退
+          const displayLabel = paramConfig?.label_cn || paramName.replace(/_/g, ' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 
           return (
             <div key={paramName} className="flex flex-row items-center gap-2">
               <label 
                 htmlFor={`param-${paramName}`} 
-                className="w-1/3 flex-shrink-0 block text-sm font-medium text-gray-700 capitalize md:w-2/5 lg:w-1/3"
+                className="w-1/3 flex-shrink-0 block text-sm font-medium text-gray-700 md:w-2/5 lg:w-1/3"
               >
-                {englishLabel}
-                {chineseLabel && <span className="block text-xs text-gray-500">({chineseLabel})</span>}
+                {displayLabel}
               </label>
               <input
                 type={inputType}
